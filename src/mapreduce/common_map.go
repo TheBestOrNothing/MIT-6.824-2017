@@ -1,7 +1,11 @@
 package mapreduce
 
 import (
+	"encoding/json"
+	"fmt"
 	"hash/fnv"
+	"io/ioutil"
+	"os"
 )
 
 // doMap manages one map task: it reads one of the input files
@@ -48,11 +52,37 @@ func doMap(
 	// common_reduce.go.
 	//
 	//   enc := json.NewEncoder(file)
-	//   for _, kv := ... {
+	//   for _, kv := ...
 	//     err := enc.Encode(&kv)
 	//
 	// Remember to close the file after you have written all the values!
 	//
+
+	//Open the file and read all the content of the file
+	debug("Debug in doMap")
+	contents, err := ioutil.ReadFile(inFile)
+	if err != nil {
+		fmt.Println("Error occur when open input file", err)
+	}
+	//exe the user Map function
+	KVs := mapF(inFile, string(contents))
+	//create intermediate files to contain the map output
+	var names []string
+	for reduceTaskNumber := 0; reduceTaskNumber < nReduce; reduceTaskNumber++ {
+		names = append(names, reduceName(jobName, mapTaskNumber, reduceTaskNumber))
+		file, err := os.Create(names[reduceTaskNumber])
+		if err != nil {
+			fmt.Println("Error occur when create intermediate files", err)
+		}
+		//fill KVs to the intermediate fils
+		enc := json.NewEncoder(file)
+		for _, kv := range KVs {
+			if int(ihash(kv.Key))%nReduce == reduceTaskNumber {
+				enc.Encode(kv)
+			}
+		}
+		file.Close()
+	}
 }
 
 func ihash(s string) int {
