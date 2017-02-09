@@ -50,11 +50,13 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 		go func() {
 			defer wg.Done()
 			//Call DoTask service
+			//lab1.4 Handling worker failures, add CallDoTask
 		CallDoTask:
 			worker := <-registerChan
 			taskState := call(worker, "Worker.DoTask", taskArgs, new(struct{}))
 			if taskState == false {
 				fmt.Printf("Worker: RPC %s DoTask error\n", worker)
+				//lab1.4 added
 				go func() { registerChan <- worker }()
 				goto CallDoTask
 			}
