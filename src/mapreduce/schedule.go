@@ -1,6 +1,9 @@
 package mapreduce
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 //
 // schedule() starts and waits for all tasks in the given phase (Map
@@ -24,7 +27,6 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 	}
 
 	fmt.Printf("Schedule: %v %v tasks (%d I/Os)\n", ntasks, phase, n_other)
-
 	// All ntasks tasks have to be scheduled on workers, and only once all of
 	// them have been completed successfully should the function return.
 	// Remember that workers may fail, and that any given worker may finish
@@ -32,5 +34,36 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 	//
 	// TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO
 	//
+	//1.Get available work from register channle (<-registerChan)
+	//2.To use DoTask service for each task
+	//3.Register the worker to master after task done
+	//4.Do not return until all the tasks finished
+	var wg sync.WaitGroup
+	for task := 0; task < ntasks; task++ {
+		taskArgs := new(DoTaskArgs)
+		taskArgs.JobName = jobName
+		taskArgs.TaskNumber = task
+		taskArgs.File = mapFiles[task]
+		taskArgs.NumOtherPhase = n_other
+		taskArgs.Phase = phase
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			//Call DoTask service
+		CallDoTask:
+			worker := <-registerChan
+			taskState := call(worker, "Worker.DoTask", taskArgs, new(struct{}))
+			if taskState == false {
+				fmt.Printf("Worker: RPC %s DoTask error\n", worker)
+				go func() { registerChan <- worker }()
+				goto CallDoTask
+			}
+			//Release worker to registerChan
+			go func() { registerChan <- worker }()
+		}()
+
+	}
+	//hand out task to the work
+	wg.Wait()
 	fmt.Printf("Schedule: %v phase done\n", phase)
 }
