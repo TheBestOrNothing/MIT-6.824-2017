@@ -64,7 +64,6 @@ type Raft struct {
 	currentTerm int           //Latest term server has seen
 	votedFor    int           //CandidateID that receive vote in current term
 	log         map[int]Entry //log
-	timeoutD    time.Duration //The duration of timeout
 	timeoutT    *time.Timer   //Timer to kick off leader election
 	heartbeatT  *time.Timer   //Ticker to triger heartbeat
 	victory     chan bool     //Channel for victory in votting
@@ -242,6 +241,7 @@ func (rf *Raft) RequestVote(candidate *RequestVoteArgs, reply *RequestVoteReply)
 					rf.currentTerm = candidate.Term
 					rf.votedFor = candidate.CandidateID
 					reply.VoteGranted = true
+					resetTimer(rf.timeoutT, timeOut())
 					return
 				} else {
 					reply.Term = term
@@ -278,6 +278,7 @@ func (rf *Raft) RequestVote(candidate *RequestVoteArgs, reply *RequestVoteReply)
 			fmt.Printf("RequestVote: %d:%dL<   leader to follow \n",
 				rf.me, rf.currentTerm)
 		case Follower:
+			resetTimer(rf.timeoutT, timeOut())
 			break
 		}
 
@@ -335,10 +336,14 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendReply) {
 	rf.Lock()
 	defer rf.Unlock()
+	//fmt.Printf("RequestAppend: %d:%d  request from  ... %d:%d \n",
+	//	rf.me, rf.currentTerm, leader.LeaderID, leader.Term)
 	//Your code here (2A, 2B).
 	//LAB 2A
 	//Reply false if args.Term < rf.currentTerm (5.1)
 	if term := rf.currentTerm; leader.Term < term {
+		fmt.Printf("RequestAppend: %d:%d>  reject from  ... %d:%d \n",
+			rf.me, rf.currentTerm, leader.LeaderID, leader.Term)
 		reply.Term = term
 		reply.Success = false
 		return
@@ -352,16 +357,21 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 			//new leader elected when you in candidate
 			rf.victory <- false
 			<-rf.done
+			fmt.Printf("RequestAppend: %d:%dC= another leader elected & change status to follow  %d:%d \n",
+				rf.me, rf.currentTerm, leader.LeaderID, leader.Term)
 			//resetTimer and append success
 		case Leader:
-			fmt.Printf("Raft.RequestAppend: 1.Two leaders exist!!! 2.What happend???\n")
+			fmt.Printf("Raft.RequestAppend: 1.Two leaders exist with same term!!! \n")
 		case Follower:
 			//resetTimer and append success
+			fmt.Printf("RequestAppend: %d:%dF= get heartbeat from %d:%d \n",
+				rf.me, rf.currentTerm, leader.LeaderID, leader.Term)
+			resetTimer(rf.timeoutT, timeOut())
+			break
 		}
 
 		if len(leader.Entries) == 0 {
 			rf.currentTerm = leader.Term
-			resetTimer(rf.timeoutT, rf.timeoutD)
 			reply.Success = true
 		} else {
 			fmt.Printf("Raft.RequestAppend: Warning Append with logs\n")
@@ -375,12 +385,17 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 		//leader.Term >  rf.currentTerm means the raft should be follow ASAP
 		rf.victory <- false
 		<-rf.done
+		fmt.Printf("RequestAppend: %d:%dC< get heartbeat from %d:%d \n",
+			rf.me, rf.currentTerm, leader.LeaderID, leader.Term)
 		//resetTimer and append success
 	case Leader:
 		//leader.Term >  rf.currentTerm this will not occur
 		fmt.Printf("Raft.RequestAppend: Two leaders exist!!! The old leader should change to follower\n")
 		l2f(rf)
 	case Follower:
+		fmt.Printf("RequestAppend: %d:%dF< get heartbeat from %d:%d \n",
+			rf.me, rf.currentTerm, leader.LeaderID, leader.Term)
+		resetTimer(rf.timeoutT, timeOut())
 		break
 	}
 	//Heartbeats - Append RPC with no log entry
@@ -388,7 +403,6 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 
 	if len(leader.Entries) == 0 {
 		rf.currentTerm = leader.Term
-		resetTimer(rf.timeoutT, rf.timeoutD)
 		reply.Success = true
 	} else {
 		fmt.Printf("Raft.RequestAppend: Warning Append with logs\n")
@@ -456,7 +470,7 @@ func timeOut() time.Duration {
 	rand.Seed(time.Now().UTC().UnixNano())
 	randNum := rand.Intn(TimeTo-TimeFrom) + TimeFrom
 	//duration := randNum * time.Millisecond
-	fmt.Println(randNum)
+	//fmt.Println(randNum)
 	return time.Duration(randNum) * time.Millisecond
 }
 
@@ -468,12 +482,12 @@ func election(rf *Raft) {
 	rf.Lock()
 	//Stop the timer firstly
 	rf.status = Candidate
-	//stopTimer(rf.timeoutT)
 	//To begin an election, a follower increments its current
 	//term and transitions to candidate state. It then votes for
 	//itself (5.2)
 	rf.currentTerm = rf.currentTerm + 1
 	currentTerm := rf.currentTerm
+	resetTimer(rf.timeoutT, timeOut())
 	me := rf.me
 	rf.votedFor = rf.me
 	votedNum := 1
@@ -501,7 +515,7 @@ func election(rf *Raft) {
 
 	replys := make([]RequestVoteReply, len(rf.peers))
 	peers := rf.peers
-	fmt.Println("F2C electing  .............", me)
+	fmt.Printf("F2C electing  .............%d:%d\n", me, rf.currentTerm)
 	rf.Unlock()
 
 	for idx := 0; idx < len(peers); idx++ {
@@ -523,7 +537,7 @@ func election(rf *Raft) {
 			//and AppendEntries PRC sent to it will fail. Raft handles these
 			//failurs by retrying indefinitely.(5.5)
 			if taskState == false {
-				fmt.Printf("Raft.Election:RPC error - %v send to %v\n", me, idx)
+				//fmt.Printf("Raft.Election:RPC error - %v send to %v\n", me, idx)
 				goto ReVote
 			}
 			if replys[idx].VoteGranted == true {
@@ -561,7 +575,7 @@ func election(rf *Raft) {
 		c2f(rf)
 	}
 	cdtEnded = true
-	rf.done <- true
+	go func() { rf.done <- true }()
 	return
 }
 
@@ -580,8 +594,9 @@ func stopTimer(t *time.Timer) {
 }
 
 func resetTimer(t *time.Timer, d time.Duration) {
-	//fmt.Println("Reset timer  .............")
+	//fmt.Println("Stop & reset timer.............")
 	stopTimer(t)
+	//t = time.NewTimer(time.Duration(30) * time.Millisecond)
 	t.Reset(d)
 }
 
@@ -614,7 +629,7 @@ func beatOnce(rf *Raft) {
 			//and AppendEntries PRC sent to it will fail. Raft handles these
 			//failurs by retrying indefinitely.(5.5)
 			if taskState == false {
-				//fmt.Printf("Raft.Heartbeat:RPC error\n")
+				//fmt.Printf("Raft.Heartbeat:RPC error from %d to %d\n", me, idx)
 				goto Rebeat
 			}
 			return
@@ -637,7 +652,8 @@ func c2l(rf *Raft) {
 			select {
 			case <-rf.heartbeatT.C:
 				beatOnce(rf)
-				resetTimer(rf.heartbeatT, heartbeatD)
+				//resetTimer(rf.heartbeatT, heartbeatD)
+				rf.heartbeatT.Reset(heartbeatD)
 			}
 
 		}
@@ -650,6 +666,8 @@ func c2f(rf *Raft) {
 	rf.currentTerm = rf.currentTerm - 1
 	rf.votedFor = -1
 	resetTimer(rf.timeoutT, timeOut())
+
+	//rf.timeoutT = time.NewTimer(time.Duration(30) * time.Millisecond)
 	fmt.Println("C2F          .............", rf.me)
 }
 
@@ -668,6 +686,7 @@ func drainChan(c chan bool) {
 	for {
 		select {
 		case <-c:
+			fmt.Println("drain the chan .............")
 			continue
 		default:
 			return
@@ -695,12 +714,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.votedFor = -1
-	rf.timeoutD = timeOut()
-	rf.timeoutT = time.NewTimer(rf.timeoutD)
+	//rf.timeoutT = time.NewTimer(timeOut())
+	//array := [3]int{188, 176, 179}
+	array := [3]int{149, 149, 149}
+	rf.timeoutT = time.NewTimer(time.Duration(array[me]) * time.Millisecond)
 	rf.victory = make(chan bool)
 	rf.done = make(chan bool)
 	rf.log = make(map[int]Entry)
-	fmt.Printf("%d Starting up .............\n", rf.me)
 
 	// Your initialization code here (2A, 2B, 2C).
 	//LAB 2A
