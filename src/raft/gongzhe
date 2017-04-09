@@ -1,0 +1,263 @@
+disconnect(0)
+disconnect(1)
+disconnect(2)
+Test (2A): initial election ...
+0 timeout     .............
+C2C . . . . . . . . . . . .0:1
+RequestVote: 1:0<   less up-to-date  ... 0:1 
+RequestVote: 1:0<   voting for     ... 0:1 
+0 The call took 1.269389ms to run.
+C2L          ............. 0
+RequestAppend: 2:0F< get heartbeat from 0:1 
+Configuration: Leader with last Term - 0:1
+  ... Passed
+disconnect(0)
+disconnect(1)
+disconnect(2)
+Test (2A): election after network failure ...
+0 timeout     .............
+2 timeout     .............
+1 timeout     .............
+C2C . . . . . . . . . . . .1:1
+C2F          ............. 0
+C2C . . . . . . . . . . . .2:1
+RequestVote: 0:0  Close election ... 
+RequestVote: 0:0<   less up-to-date  ... 1:1 
+RequestVote: 0:0<   voting for     ... 1:1 
+1 The call took 732.071µs to run.
+C2L          ............. 1
+RequestVote: 0:1F=  have voted for ... 1 
+RequestVote: 1:1L= I'm leader reject ... 2:1 
+2 The call took 664.731µs to run.
+C2C . . . . . . . . . . . .0:2
+RequestVote: 1:1<   less up-to-date  ... 0:2 
+L2F          ............. 1
+RequestVote: 1:1L<   leader to follow 
+RequestVote: 1:1<   voting for     ... 0:2 
+0 The call took 699.77µs to run.
+1 timeout     .............
+C2C . . . . . . . . . . . .2:2
+RequestVote: 0:2F=  have voted for ... 1 
+RequestVote: 1:2C=  voted myself reject ... 2:2 
+2 The call took 549.48µs to run.
+C2C . . . . . . . . . . . .1:3
+RequestVote: 0:2<   less up-to-date  ... 1:3 
+RequestVote: 0:2<   voting for     ... 1:3 
+1 The call took 245.29µs to run.
+C2L          ............. 1
+C2F          ............. 2
+RequestAppend: 2:2C< get heartbeat from 1:3 
+Configuration: Leader with last Term - 1:3
+disconnect(1)
+0 timeout     .............
+drain the chan .............
+C2C . . . . . . . . . . . .0:4
+2 timeout     .............
+C2C . . . . . . . . . . . .2:4
+RequestVote: 0:4C=  voted myself reject ... 2:4 
+C2C . . . . . . . . . . . .0:5
+C2C . . . . . . . . . . . .2:5
+RequestVote: 0:5C=  voted myself reject ... 2:5 
+C2C . . . . . . . . . . . .0:6
+C2C . . . . . . . . . . . .2:6
+RequestVote: 0:6C=  voted myself reject ... 2:6 
+C2C . . . . . . . . . . . .0:7
+C2C . . . . . . . . . . . .2:7
+RequestVote: 0:7C=  voted myself reject ... 2:7 
+C2C . . . . . . . . . . . .0:8
+C2C . . . . . . . . . . . .2:8
+RequestVote: 0:8C=  voted myself reject ... 2:8 
+C2C . . . . . . . . . . . .0:9
+C2C . . . . . . . . . . . .2:9
+RequestVote: 0:9C=  voted myself reject ... 2:9 
+C2C . . . . . . . . . . . .0:10
+C2C . . . . . . . . . . . .2:10
+RequestVote: 0:10C=  voted myself reject ... 2:10 
+C2C . . . . . . . . . . . .0:11
+C2C . . . . . . . . . . . .2:11
+RequestVote: 0:11C=  voted myself reject ... 2:11 
+C2C . . . . . . . . . . . .0:12
+2 The call took 342.007183ms to run.
+C2C . . . . . . . . . . . .2:12
+RequestVote: 0:12C=  voted myself reject ... 2:12 
+C2C . . . . . . . . . . . .0:13
+2 The call took 221.210746ms to run.
+C2C . . . . . . . . . . . .2:13
+RequestVote: 0:13C=  voted myself reject ... 2:13 
+C2C . . . . . . . . . . . .0:14
+C2C . . . . . . . . . . . .2:14
+RequestVote: 0:14C=  voted myself reject ... 2:14 
+C2C . . . . . . . . . . . .0:15
+C2C . . . . . . . . . . . .2:15
+RequestVote: 0:15C=  voted myself reject ... 2:15 
+C2C . . . . . . . . . . . .0:16
+C2C . . . . . . . . . . . .2:16
+RequestVote: 0:16C=  voted myself reject ... 2:16 
+C2C . . . . . . . . . . . .2:17
+C2F          ............. 0
+RequestVote: 0:16  Close election ... 
+RequestVote: 0:16<   less up-to-date  ... 2:17 
+RequestVote: 0:16<   voting for     ... 2:17 
+2 The call took 20.228365ms to run.
+C2L          ............. 2
+C2C . . . . . . . . . . . .0:18
+Configuration: Leader with last Term - 2:17
+Test (2A): Pass 1 ...
+0 timeout     .............
+C2C . . . . . . . . . . . .0:19
+RequestVote: 1:3<   less up-to-date  ... 0:19 
+L2F          ............. 1
+RequestVote: 1:3L<   leader to follow 
+RequestVote: 1:3<   voting for     ... 0:19 
+0 The call took 371.814µs to run.
+C2L          ............. 0
+Raft.RequestAppend: Two leaders exist!!! The old leader should change to follower
+L2F          ............. 2
+Raft.RequestAppend:System Error - Two leaders exist with same term!!! 
+Raft.RequestAppend:System Error - Two leaders exist with same term!!! 
+Raft.RequestAppend:System Error - Two leaders exist with same term!!! 
+Raft.RequestAppend:System Error - Two leaders exist with same term!!! 
+0 The call took 1.810847947s to run.
+Raft.RequestAppend:System Error - Two leaders exist with same term!!! 
+Raft.RequestAppend:System Error - Two leaders exist with same term!!! 
+Raft.RequestAppend:System Error - Two leaders exist with same term!!! 
+Raft.RequestAppend:System Error - Two leaders exist with same term!!! 
+0 The call took 1.800917848s to run.
+Raft.RequestAppend:System Error - Two leaders exist with same term!!! 
+Raft.RequestAppend:System Error - Two leaders exist with same term!!! 
+Raft.RequestAppend:System Error - Two leaders exist with same term!!! 
+Raft.RequestAppend:System Error - Two leaders exist with same term!!! 
+0 The call took 2.796892924s to run.
+Raft.RequestAppend:System Error - Two leaders exist with same term!!! 
+Raft.RequestAppend:System Error - Two leaders exist with same term!!! 
+Raft.RequestAppend:System Error - Two leaders exist with same term!!! 
+Configuration: Leader with last Term - 0:19
+Test (2A): Pass 2 ...
+disconnect(0)
+disconnect(1)
+1 timeout     .............
+C2C . . . . . . . . . . . .1:20
+2 timeout     .............
+C2C . . . . . . . . . . . .2:20
+C2C . . . . . . . . . . . .1:21
+C2C . . . . . . . . . . . .2:21
+C2C . . . . . . . . . . . .1:22
+C2C . . . . . . . . . . . .2:22
+C2C . . . . . . . . . . . .1:23
+C2C . . . . . . . . . . . .2:23
+C2C . . . . . . . . . . . .2:24
+C2C . . . . . . . . . . . .1:24
+C2C . . . . . . . . . . . .2:25
+C2C . . . . . . . . . . . .1:25
+0 The call took 2.183540731s to run.
+C2C . . . . . . . . . . . .2:26
+2 The call took 3.149396088s to run.
+C2C . . . . . . . . . . . .1:26
+C2C . . . . . . . . . . . .2:27
+2 The call took 3.672225634s to run.
+C2C . . . . . . . . . . . .1:27
+C2C . . . . . . . . . . . .2:28
+C2C . . . . . . . . . . . .1:28
+0 The call took 4.145055489s to run.
+C2C . . . . . . . . . . . .1:29
+0 The call took 2.334114131s to run.
+C2C . . . . . . . . . . . .2:29
+C2C . . . . . . . . . . . .1:30
+C2C . . . . . . . . . . . .2:30
+C2C . . . . . . . . . . . .2:31
+C2C . . . . . . . . . . . .1:31
+Test (2A): Pass 3 ...
+C2F          ............. 1
+RequestAppend: 1:31C= another leader elected & change status to follow  2:31 
+C2C . . . . . . . . . . . .2:32
+RequestAppend: 1:31F< get heartbeat from 2:32 
+2 The call took 4.889740606s to run.
+C2C . . . . . . . . . . . .2:33
+RequestAppend: 1:32F< get heartbeat from 2:33 
+2 The call took 5.251605777s to run.
+2 The call took 3.632089306s to run.
+C2C . . . . . . . . . . . .2:34
+RequestAppend: 1:33F< get heartbeat from 2:34 
+2 The call took 1.881778414s to run.
+C2C . . . . . . . . . . . .2:35
+RequestAppend: 1:34F< get heartbeat from 2:35 
+1 The call took 1.257965779s to run.
+1 The call took 2.243580602s to run.
+C2C . . . . . . . . . . . .2:36
+RequestAppend: 1:35F< get heartbeat from 2:36 
+2 The call took 5.010083732s to run.
+0 The call took 4.417072411s to run.
+1 The call took 1.137285296s to run.
+0 The call took 3.843839699s to run.
+2 The call took 1.509106157s to run.
+C2C . . . . . . . . . . . .2:37
+RequestAppend: 1:36F< get heartbeat from 2:37 
+2 The call took 1.207500501s to run.
+C2C . . . . . . . . . . . .2:38
+RequestAppend: 1:37F< get heartbeat from 2:38 
+1 The call took 3.159069598s to run.
+C2C . . . . . . . . . . . .2:39
+RequestAppend: 1:38F< get heartbeat from 2:39 
+C2C . . . . . . . . . . . .2:40
+RequestAppend: 1:39F< get heartbeat from 2:40 
+2 The call took 3.169687216s to run.
+C2C . . . . . . . . . . . .2:41
+2 The call took 5.120973526s to run.
+RequestAppend: 1:40F< get heartbeat from 2:41 
+1 The call took 2.836849531s to run.
+2 The call took 4.618340296s to run.
+C2C . . . . . . . . . . . .2:42
+RequestAppend: 1:41F< get heartbeat from 2:42 
+2 The call took 482.677063ms to run.
+2 The call took 2.575594612s to run.
+C2C . . . . . . . . . . . .2:43
+RequestAppend: 1:42F< get heartbeat from 2:43 
+C2C . . . . . . . . . . . .2:44
+RequestAppend: 1:43F< get heartbeat from 2:44 
+1 The call took 3.46136474s to run.
+2 The call took 6.570095303s to run.
+2 The call took 3.934264641s to run.
+C2C . . . . . . . . . . . .2:45
+RequestAppend: 1:44F< get heartbeat from 2:45 
+2 The call took 261.864478ms to run.
+C2C . . . . . . . . . . . .2:46
+RequestAppend: 1:45F< get heartbeat from 2:46 
+2 The call took 915.507916ms to run.
+C2C . . . . . . . . . . . .2:47
+RequestAppend: 1:46F< get heartbeat from 2:47 
+2 The call took 4.144824497s to run.
+C2C . . . . . . . . . . . .2:48
+RequestAppend: 1:47F< get heartbeat from 2:48 
+2 The call took 5.9263435s to run.
+1 The call took 3.501152864s to run.
+C2C . . . . . . . . . . . .2:49
+RequestAppend: 1:48F< get heartbeat from 2:49 
+2 The call took 6.332037545s to run.
+0 The call took 7.454756664s to run.
+2 The call took 3.400940149s to run.
+RequestVote: 1:49F=  voted for  ... 2:49 
+2 The call took 141.091742ms to run.
+2 The call took 1.338491275s to run.
+C2L          ............. 2
+Configuration: Leader with last Term - 2:49
+Test (2A): Pass 4 ...
+Raft.RequestAppend: Two leaders exist!!! The old leader should change to follower
+L2F          ............. 0
+C2C . . . . . . . . . . . .2:50
+RequestVote: 0:49<   less up-to-date  ... 2:50 
+RequestVote: 0:49<   voting for     ... 2:50 
+2 The call took 267.045µs to run.
+RequestAppend: 1:49F< get heartbeat from 2:50 
+1 The call took 3.239731498s to run.
+2 The call took 3.521402766s to run.
+0 The call took 8.16949577s to run.
+1 The call took 4.366544581s to run.
+2 The call took 4.687979423s to run.
+1 The call took 4.41690318s to run.
+2 The call took 2.847891319s to run.
+Configuration: Leader with last Term - 2:50
+Test (2A): Pass 5 ...
+  ... Passed
+drain the chan .............
+PASS
+ok  	raft	11.778s
