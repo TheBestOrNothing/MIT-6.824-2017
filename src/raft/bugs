@@ -1,3 +1,5 @@
 Lab2A:
 	- Two leader exist with the same term
 	- Sometimes, there is no leader elected after old leader disconnetted 
+	- If rf.victory assign true when currentTerm is 45, but the raft peer 
+	  change to Leader with the term bigger than 45.
