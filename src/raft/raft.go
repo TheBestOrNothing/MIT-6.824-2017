@@ -198,6 +198,8 @@ func up2date(rf *Raft, candidate *RequestVoteArgs) bool {
 func (rf *Raft) RequestVote(candidate *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.Lock()
 	defer rf.Unlock()
+	DPrintf("Raft:%d(term:%d)(status:%d)...VOTE<-Raft:%d(term:%d)\n",
+		rf.me, rf.currentTerm, rf.status, candidate.CandidateID, candidate.Term)
 	//fmt.Printf("RequestVote: %d:%d    request vote from .. ...%d:%d \n",
 	//	rf.me, rf.currentTerm, candidate.CandidateID, candidate.Term)
 	// Your code here (2A, 2B).
@@ -278,8 +280,8 @@ func (rf *Raft) RequestVote(candidate *RequestVoteArgs, reply *RequestVoteReply)
 	//as up-to-date as receiver's log, grant vote
 	if up2date(rf, candidate) {
 		//Candidate is at least as up-to-date as this server
-		fmt.Printf("RequestVote: %d:%d<   less up-to-date  ... %d:%d \n",
-			rf.me, rf.currentTerm, candidate.CandidateID, candidate.Term)
+		//fmt.Printf("RequestVote: %d:%d<   less up-to-date  ... %d:%d \n",
+		//	rf.me, rf.currentTerm, candidate.CandidateID, candidate.Term)
 		switch rf.status {
 		case Candidate:
 			fmt.Printf("RequestVote: %d:%dC<   Warning should not happen ... %d:%d \n",
@@ -293,8 +295,8 @@ func (rf *Raft) RequestVote(candidate *RequestVoteArgs, reply *RequestVoteReply)
 			break
 		}
 
-		fmt.Printf("RequestVote: %d:%d<   voting for     ... %d:%d \n",
-			rf.me, rf.currentTerm, candidate.CandidateID, candidate.Term)
+		//fmt.Printf("RequestVote: %d:%d<   voting for     ... %d:%d \n",
+		//	rf.me, rf.currentTerm, candidate.CandidateID, candidate.Term)
 		rf.currentTerm = candidate.Term
 		rf.votedFor = candidate.CandidateID
 		reply.VoteGranted = true
@@ -347,6 +349,8 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendReply) {
 	rf.Lock()
 	defer rf.Unlock()
+	DPrintf("Raft:%d(term:%d)(status:%d)...Append<-Raft:%d(term:%d)\n",
+		rf.me, rf.currentTerm, rf.status, leader.LeaderID, leader.Term)
 	//fmt.Printf("RequestAppend: %d:%d  request from  ... %d:%d \n",
 	//	rf.me, rf.currentTerm, leader.LeaderID, leader.Term)
 	//Your code here (2A, 2B).
@@ -404,8 +408,8 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 		fmt.Printf("Raft.RequestAppend: Two leaders exist!!! The old leader should change to follower\n")
 		l2f(rf)
 	case Follower:
-		fmt.Printf("RequestAppend: %d:%dF< get heartbeat from %d:%d \n",
-			rf.me, rf.currentTerm, leader.LeaderID, leader.Term)
+		//fmt.Printf("RequestAppend: %d:%dF< get heartbeat from %d:%d \n",
+		//	rf.me, rf.currentTerm, leader.LeaderID, leader.Term)
 		resetTimer(rf.timeoutT, timeOut())
 		break
 	}
@@ -498,6 +502,7 @@ func timeOut() time.Duration {
 func electOnce(rf *Raft) {
 
 	rf.Lock()
+	rf.Unlock()
 	rf.currentTerm++
 	//term := rf.currentTerm
 	votedNum := 1
@@ -516,35 +521,39 @@ func electOnce(rf *Raft) {
 
 	replys := make([]RequestVoteReply, len(rf.peers))
 	peers := rf.peers
-	fmt.Printf("C2C . . . . . . . . . . . .%d:%d\n", rf.me, rf.currentTerm)
-	rf.Unlock()
+	//fmt.Printf("C2C . . . . . . . . . . . .%d:%d\n", rf.me, rf.currentTerm)
+	DPrintf("Raft:%d(term:%d)(status:%d)...C2C\n", rf.me, rf.currentTerm, rf.status)
 	//fmt.Printf("X2C electing  .............%d:%d\n", rf.me, rf.currentTerm)
 
 	for idx := 0; idx < len(peers); idx++ {
 		if idx == rf.me {
 			continue
 		}
-		taskState := peers[idx].Call("Raft.RequestVote", args, &replys[idx])
-		//Servers retry RPCs if they do not receive a response
-		//in a timely manner(5.1 last line).
-		//This means retry after the rpc timeout interval ,
-		//so no need to implement your own timeouts around Call
+		go func(idx int) {
+			DPrintf("Raft:%d(term:%d)(status:%d)...RPC->Raft:%d\n", rf.me, rf.currentTerm, rf.status, idx)
+			taskState := peers[idx].Call("Raft.RequestVote", args, &replys[idx])
+			//Servers retry RPCs if they do not receive a response
+			//in a timely manner(5.1 last line).
+			//This means retry after the rpc timeout interval ,
+			//so no need to implement your own timeouts around Call
 
-		//If a follower of or candidate creashed, the future RequestVote
-		//and AppendEntries PRC sent to it will fail. Raft handles these
-		//failurs by retrying indefinitely.(5.5)
-		if taskState == false {
-			//fmt.Printf("Raft.Election:RPC error - %v send to %v\n", me, idx)
-			continue
-		}
-
-		if replys[idx].VoteGranted == true {
-			votedNum++
-			if votedNum >= (len(peers)/2 + 1) {
-				go func() { rf.victory <- true }()
+			//If a follower of or candidate creashed, the future RequestVote
+			//and AppendEntries PRC sent to it will fail. Raft handles these
+			//failurs by retrying indefinitely.(5.5)
+			if taskState == false {
+				//fmt.Printf("Raft.Election:RPC error - %v send to %v\n", me, idx)
+				//continue
 				return
 			}
-		}
+
+			if replys[idx].VoteGranted == true {
+				votedNum++
+				if votedNum >= (len(peers)/2 + 1) {
+					go func() { rf.victory <- true }()
+					return
+				}
+			}
+		}(idx)
 
 	} //end for
 }
@@ -587,7 +596,7 @@ func election(rf *Raft) {
 
 	replys := make([]RequestVoteReply, len(rf.peers))
 	peers := rf.peers
-	fmt.Printf("F2C electing  .............%d:%d\n", me, rf.currentTerm)
+	//fmt.Printf("F2C electing  .............%d:%d\n", me, rf.currentTerm)
 	rf.Unlock()
 
 	for idx := 0; idx < len(peers); idx++ {
@@ -657,6 +666,7 @@ func election(rf *Raft) {
 func f2c(rf *Raft) {
 
 	rf.Lock()
+	DPrintf("Raft:%d(term:%d)(status:%d)...F2C\n", rf.me, rf.currentTerm, rf.status)
 	//Stop the timer firstly
 	rf.status = Candidate
 	//To begin an election, a follower increments its current
@@ -690,10 +700,10 @@ func f2c(rf *Raft) {
 			case <-rf.c2cTimer.C:
 				resetTimer(rf.c2cTimer, timeOut())
 				go func() {
-					t0 := time.Now()
+					//t0 := time.Now()
 					electOnce(rf)
-					t1 := time.Now()
-					fmt.Printf("%d The call took %v to run.\n", rf.me, t1.Sub(t0))
+					//t1 := time.Now()
+					//fmt.Printf("%d The call took %v to run.\n", rf.me, t1.Sub(t0))
 				}()
 			}
 
@@ -766,7 +776,8 @@ func c2l(rf *Raft) {
 	rf.Lock()
 	defer rf.Unlock()
 
-	fmt.Println("C2L          .............", rf.me)
+	DPrintf("Raft:%d(term:%d)(status:%d)...C2L\n",
+		rf.me, rf.currentTerm, rf.status)
 	//Stop the timeout timer
 	stopTimer(rf.timeoutT)
 	//candidate to leader
@@ -860,7 +871,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			case <-applyCh:
 				fmt.Println("Receive a apply from leader")
 			case <-rf.timeoutT.C:
-				fmt.Printf("%d timeout     .............\n", rf.me)
+				//fmt.Printf("%d timeout     .............\n", rf.me)
 				f2c(rf)
 			default:
 			}
