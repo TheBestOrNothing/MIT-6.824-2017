@@ -200,8 +200,6 @@ func (rf *Raft) RequestVote(candidate *RequestVoteArgs, reply *RequestVoteReply)
 	defer rf.Unlock()
 	DPrintf("Raft:%d(term:%d)(status:%d)...VOTE<-Raft:%d(term:%d)\n",
 		rf.me, rf.currentTerm, rf.status, candidate.CandidateID, candidate.Term)
-	//fmt.Printf("RequestVote: %d:%d    request vote from .. ...%d:%d \n",
-	//	rf.me, rf.currentTerm, candidate.CandidateID, candidate.Term)
 	// Your code here (2A, 2B).
 	//LAB 2A
 	//Reply false if candidate.Term < rf.currentTerm (5.1)
@@ -209,101 +207,40 @@ func (rf *Raft) RequestVote(candidate *RequestVoteArgs, reply *RequestVoteReply)
 	if candidate.Term < term {
 		reply.Term = term
 		reply.VoteGranted = false
-		//fmt.Printf("RequestVote: %d:%d>  reject from  ... %d:%d \n",
-		//	rf.me, rf.currentTerm, candidate.CandidateID, candidate.Term)
 		return
 	}
-	//LAB 2A
-	//Each server will vote for at most one candidate in a given term (5.2)
-	//When candidate's term is equal to this server's and votedFor is not null
-	//these means the server have voted for in this term
-	if candidate.Term == term {
-		switch rf.status {
-		case Candidate:
-			if rf.votedFor != -1 {
-				reply.Term = term
-				reply.VoteGranted = false
-				fmt.Printf("RequestVote: %d:%dC=  voted myself reject ... %d:%d \n",
-					rf.me, rf.currentTerm, candidate.CandidateID, candidate.Term)
-			} else {
-				rf.currentTerm = candidate.Term
-				rf.votedFor = candidate.CandidateID
-				reply.Term = term
-				reply.VoteGranted = true
-				fmt.Printf("RequestVote: %d:%dC=  vote for .............. %d:%d \n",
-					rf.me, rf.currentTerm, candidate.CandidateID, candidate.Term)
-			}
-			return
-		case Leader:
-			reply.Term = term
-			reply.VoteGranted = false
-			fmt.Printf("RequestVote: %d:%dL= I'm leader reject ... %d:%d \n",
-				rf.me, rf.currentTerm, candidate.CandidateID, candidate.Term)
-			return
-		case Follower:
-			if rf.votedFor != -1 {
-				reply.Term = term
-				reply.VoteGranted = false
-				fmt.Printf("RequestVote: %d:%dF=  have voted for ... %d \n",
-					rf.me, rf.currentTerm, rf.votedFor)
-				return
-			} else {
-				if up2date(rf, candidate) {
-					fmt.Printf("RequestVote: %d:%dF=  voted for  ... %d:%d \n",
-						rf.me, rf.currentTerm, candidate.CandidateID, candidate.Term)
-					rf.currentTerm = candidate.Term
-					rf.votedFor = candidate.CandidateID
-					reply.VoteGranted = true
-					resetTimer(rf.timeoutT, timeOut())
-					return
-				} else {
-					reply.Term = term
-					reply.VoteGranted = false
-					fmt.Printf("RequestVote: %d:%dF=  follow up2date than... %d:%d \n",
-						rf.me, rf.currentTerm, candidate.CandidateID, candidate.Term)
-					return
-				}
-			}
-		}
-	}
-
-	//candidate.Term > term
-	if rf.status == Candidate {
-		rf.c2f <- true
-		<-rf.done
-		fmt.Printf("RequestVote: %d:%d  Close election ... \n",
-			rf.me, rf.currentTerm)
-	}
 
 	//LAB 2A
-	//If votedFor is null or candidateID, and candidate's log is at least
-	//as up-to-date as receiver's log, grant vote
-	if up2date(rf, candidate) {
-		//Candidate is at least as up-to-date as this server
-		//fmt.Printf("RequestVote: %d:%d<   less up-to-date  ... %d:%d \n",
-		//	rf.me, rf.currentTerm, candidate.CandidateID, candidate.Term)
+	//If RPC request or response contains term T > currentTerm:
+	//set currentTerm = T, convert to follower (5.1)
+	//
+	//if election timeout elapses without granting vote to candidate:
+	//convert to candidate (5.2)
+	if candidate.Term > term {
 		switch rf.status {
 		case Candidate:
-			fmt.Printf("RequestVote: %d:%dC<   Warning should not happen ... %d:%d \n",
-				rf.me, rf.currentTerm, candidate.CandidateID, candidate.Term)
+			rf.c2f <- true
+			<-rf.done
 		case Leader:
 			l2f(rf)
-			fmt.Printf("RequestVote: %d:%dL<   leader to follow \n",
-				rf.me, rf.currentTerm)
-		case Follower:
-			resetTimer(rf.timeoutT, timeOut())
-			break
 		}
-
-		//fmt.Printf("RequestVote: %d:%d<   voting for     ... %d:%d \n",
-		//	rf.me, rf.currentTerm, candidate.CandidateID, candidate.Term)
+		rf.currentTerm = candidate.Term
+	}
+	//LAB 2A
+	//If votedFor is null or candidateId, and candidate’s log is at
+	//least as up-to-date as receiver’s log, grant vote
+	//Follower    votedFor == -1    && candidate.Term >= rf.currentTerm
+	//Follower    votedFor != -1    && candidate.Term > rf.currentTerm
+	//Candidate   votedFor == rf.me
+	if (rf.votedFor == -1 ||
+		rf.votedFor == candidate.CandidateID) &&
+		up2date(rf, candidate) {
+		resetTimer(rf.timeoutT, timeOut())
 		rf.currentTerm = candidate.Term
 		rf.votedFor = candidate.CandidateID
+		reply.Term = term
 		reply.VoteGranted = true
 	} else {
-		fmt.Printf("RequestVote: %d:%d<   more up2date %d:%d \n",
-			rf.me, rf.currentTerm, candidate.CandidateID, candidate.Term)
-		reply.Term = term
 		reply.VoteGranted = false
 	}
 	return
@@ -349,6 +286,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendReply) {
 	rf.Lock()
 	defer rf.Unlock()
+
 	DPrintf("Raft:%d(term:%d)(status:%d)...Append<-Raft:%d(term:%d)\n",
 		rf.me, rf.currentTerm, rf.status, leader.LeaderID, leader.Term)
 	//fmt.Printf("RequestAppend: %d:%d  request from  ... %d:%d \n",
@@ -356,7 +294,8 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 	//Your code here (2A, 2B).
 	//LAB 2A
 	//Reply false if args.Term < rf.currentTerm (5.1)
-	if term := rf.currentTerm; leader.Term < term {
+	term := rf.currentTerm
+	if leader.Term < term {
 		//fmt.Printf("RequestAppend: %d:%d>  reject from  ... %d:%d \n",
 		//	rf.me, rf.currentTerm, leader.LeaderID, leader.Term)
 		reply.Term = term
@@ -364,60 +303,25 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 		return
 	}
 	//LAB 2A
-	//leader.Term >= rf.currentTerm means leader is more up-to-date
-	//than this server and the server should return to follower
-	if leader.Term == rf.currentTerm {
+	//If RPC request or response contains term T > currentTerm:
+	//set currentTerm = T, convert to follower (5.1)
+	if leader.Term > term {
 		switch rf.status {
 		case Candidate:
-			//new leader elected when you in candidate
 			rf.c2f <- true
 			<-rf.done
-			fmt.Printf("RequestAppend: %d:%dC= another leader elected & change status to follow  %d:%d \n",
-				rf.me, rf.currentTerm, leader.LeaderID, leader.Term)
-			//resetTimer and append success
 		case Leader:
-			fmt.Printf("Raft.RequestAppend:System Error - Two leaders exist with same term!!! \n")
-		case Follower:
-			//resetTimer and append success
-			//fmt.Printf("RequestAppend: %d:%dF= get heartbeat from %d:%d \n",
-			//	rf.me, rf.currentTerm, leader.LeaderID, leader.Term)
-			resetTimer(rf.timeoutT, timeOut())
-			break
+			l2f(rf)
 		}
-
-		if len(leader.Entries) == 0 {
-			rf.currentTerm = leader.Term
-			reply.Success = true
-		} else {
-			fmt.Printf("Raft.RequestAppend: Warning Append with logs\n")
-		}
-		return
+		rf.currentTerm = leader.Term
 	}
 
-	//Leader.Term > rf.currentTerm
-	switch rf.status {
-	case Candidate:
-		//leader.Term >  rf.currentTerm means the raft should be follow ASAP
-		rf.c2f <- true
-		<-rf.done
-		fmt.Printf("RequestAppend: %d:%dC< get heartbeat from %d:%d \n",
-			rf.me, rf.currentTerm, leader.LeaderID, leader.Term)
-		//resetTimer and append success
-	case Leader:
-		//leader.Term >  rf.currentTerm this will not occur
-		fmt.Printf("Raft.RequestAppend: Two leaders exist!!! The old leader should change to follower\n")
-		l2f(rf)
-	case Follower:
-		//fmt.Printf("RequestAppend: %d:%dF< get heartbeat from %d:%d \n",
-		//	rf.me, rf.currentTerm, leader.LeaderID, leader.Term)
-		resetTimer(rf.timeoutT, timeOut())
-		break
-	}
 	//Heartbeats - Append RPC with no log entry
 	//Reset this follow's timer
-
 	if len(leader.Entries) == 0 {
+		resetTimer(rf.timeoutT, timeOut())
 		rf.currentTerm = leader.Term
+		reply.Term = term
 		reply.Success = true
 	} else {
 		fmt.Printf("Raft.RequestAppend: Warning Append with logs\n")
@@ -503,10 +407,12 @@ func electOnce(rf *Raft) {
 
 	rf.Lock()
 	rf.Unlock()
+	if rf.status != Candidate {
+		return
+	}
 	rf.currentTerm++
-	//term := rf.currentTerm
+	currentTerm := rf.currentTerm
 	votedNum := 1
-	//againstNum := 0
 	//drain victory channel because victory will set to false many times
 	//when a raftA is candidate and it get reject vote from raftB with bigger term
 	//at the same time a leader(raftC) have been selected and send heartbeat to raftA
@@ -530,7 +436,8 @@ func electOnce(rf *Raft) {
 			continue
 		}
 		go func(idx int) {
-			DPrintf("Raft:%d(term:%d)(status:%d)...RPC->Raft:%d\n", rf.me, rf.currentTerm, rf.status, idx)
+			DPrintf("Raft:%d(term:%d)(status:%d)...RPC->Raft:%d\n",
+				rf.me, rf.currentTerm, rf.status, idx)
 			taskState := peers[idx].Call("Raft.RequestVote", args, &replys[idx])
 			//Servers retry RPCs if they do not receive a response
 			//in a timely manner(5.1 last line).
@@ -546,6 +453,12 @@ func electOnce(rf *Raft) {
 				return
 			}
 
+			if replys[idx].Term > currentTerm {
+				rf.c2f <- true
+				<-rf.done
+				return
+			}
+
 			if replys[idx].VoteGranted == true {
 				votedNum++
 				if votedNum >= (len(peers)/2 + 1) {
@@ -556,108 +469,6 @@ func electOnce(rf *Raft) {
 		}(idx)
 
 	} //end for
-}
-
-func election(rf *Raft) {
-
-	rf.Lock()
-	//Stop the timer firstly
-	rf.status = Candidate
-	//To begin an election, a follower increments its current
-	//term and transitions to candidate state. It then votes for
-	//itself (5.2)
-	rf.currentTerm = rf.currentTerm + 1
-	currentTerm := rf.currentTerm
-	resetTimer(rf.timeoutT, timeOut())
-	me := rf.me
-	rf.votedFor = rf.me
-	votedNum := 1
-	againstNum := 0
-	//drain victory channel because victory will set to false many times
-	//when a raftA is candidate and it get reject vote from raftB with bigger term
-	//at the same time a leader(raftC) have been selected and send heartbeat to raftA
-	drainChan(rf.victory)
-	drainChan(rf.done)
-
-	//candidate ended means candidate have changed status no mater to leader or follow
-	cdtEnded := false
-
-	// Lock to protect for votedNumber
-	voteMu := &sync.Mutex{}
-	againstMu := &sync.Mutex{}
-
-	//Issues RequestVote RPCs in parallel to each of
-	//the other servers in the cluster.(5.2)
-	args := &RequestVoteArgs{}
-	args.Term = rf.currentTerm
-	args.CandidateID = rf.me
-	args.LastLogTerm = rf.log[len(rf.log)-1].Term
-	args.LastLogIndex = len(rf.log) - 1
-
-	replys := make([]RequestVoteReply, len(rf.peers))
-	peers := rf.peers
-	//fmt.Printf("F2C electing  .............%d:%d\n", me, rf.currentTerm)
-	rf.Unlock()
-
-	for idx := 0; idx < len(peers); idx++ {
-		if idx == me {
-			continue
-		}
-		go func(idx int) {
-		ReVote:
-			if cdtEnded {
-				return
-			}
-			taskState := peers[idx].Call("Raft.RequestVote", args, &replys[idx])
-			//Servers retry RPCs if they do not receive a response
-			//in a timely manner(5.1 last line).
-			//This means retry after the rpc timeout interval ,
-			//so no need to implement your own timeouts around Call
-
-			//If a follower of or candidate creashed, the future RequestVote
-			//and AppendEntries PRC sent to it will fail. Raft handles these
-			//failurs by retrying indefinitely.(5.5)
-			if taskState == false {
-				//fmt.Printf("Raft.Election:RPC error - %v send to %v\n", me, idx)
-				goto ReVote
-			}
-			if replys[idx].VoteGranted == true {
-				voteMu.Lock()
-				votedNum++
-				if votedNum >= (len(peers)/2 + 1) {
-					rf.victory <- true
-				}
-				voteMu.Unlock()
-			} else {
-				//1.VoteGranted is false and reply's term is equal to the currentTerm,
-				//  it means replyer have voted for another candidate
-				againstMu.Lock()
-				againstNum++
-				if againstNum >= (len(peers)/2 + len(peers)%2) {
-					rf.victory <- false
-				}
-				againstMu.Unlock()
-
-				//2.VoteGranted is false and reply's term is big than currentTerm,
-				//  it means replyer is more up-to-date than caller,
-				//  replyer take the vote power and the candidate should be back to
-				//  follower immediately
-				if replys[idx].Term > currentTerm {
-					rf.victory <- false
-				}
-			}
-			return
-		}(idx)
-	} //end for
-
-	if <-rf.victory {
-		c2l(rf)
-	} else {
-		c2f(rf)
-	}
-	cdtEnded = true
-	go func() { rf.done <- true }()
-	return
 }
 
 //
@@ -683,7 +494,6 @@ func f2c(rf *Raft) {
 	drainChan(rf.done)
 	rf.Unlock()
 
-	//electOnce(rf)
 	rf.c2cTimer = time.NewTimer(time.Duration(0))
 	go func() {
 		for {
@@ -706,7 +516,6 @@ func f2c(rf *Raft) {
 					//fmt.Printf("%d The call took %v to run.\n", rf.me, t1.Sub(t0))
 				}()
 			}
-
 		}
 	}()
 
@@ -736,6 +545,7 @@ func resetTimer(t *time.Timer, d time.Duration) {
 
 //Do not retry if the RequestAppend RPC do not receive a response
 func beatOnce(rf *Raft) {
+	currentTerm := rf.currentTerm
 	//Args for heartbeat
 	args := &RequestAppendArgs{}
 	args.Term = rf.currentTerm
@@ -767,7 +577,13 @@ func beatOnce(rf *Raft) {
 				return
 				//goto Rebeat
 			}
+
+			if replys[idx].Term > currentTerm {
+				l2f(rf)
+			}
+
 			return
+
 		}(idx)
 	} //end for
 }
