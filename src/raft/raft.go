@@ -243,12 +243,10 @@ func (rf *Raft) RequestVote(candidate *RequestVoteArgs, reply *RequestVoteReply)
 		rf.votedFor = candidate.CandidateID
 		reply.Term = term
 		reply.VoteGranted = true
-		DPrintf("Raft:%d(term:%d)(status:%d)...VOTE<-Raft:%d(term:%d)VotedFor\n",
+		DPrintf("Raft:%d(term:%d)(status:%d)...VOTEFOR Raft:%d(term:%d)\n",
 			rf.me, rf.currentTerm, rf.status, candidate.CandidateID, candidate.Term)
 	} else {
 		reply.VoteGranted = false
-		DPrintf("Raft:%d(term:%d)(status:%d)...VOTE<-Raft:%d(term:%d)NoVotedFor\n",
-			rf.me, rf.currentTerm, rf.status, candidate.CandidateID, candidate.Term)
 	}
 	return
 }
