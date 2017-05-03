@@ -64,10 +64,10 @@ type Raft struct {
 	currentTerm int           //Latest term server has seen
 	votedFor    int           //CandidateID that receive vote in current term
 	log         map[int]Entry //log
-	timeoutT    *time.Timer   //Timer to kick off leader election
-	c2cTimer    *time.Timer   //Timer to kick off leader election
+	f2c         *time.Timer   //Timer to kick off leader election
+	c2c         *time.Timer   //Timer to kick off leader election
 	heartbeatT  *time.Timer   //Ticker to triger heartbeat
-	victory     chan bool     //Channel for victory in votting
+	c2l         chan bool     //Channel for victory in votting
 	c2f         chan bool     //Channel for victory in votting
 	done        chan bool     //Done means candiate status changed to others
 }
@@ -224,7 +224,7 @@ func (rf *Raft) RequestVote(candidate *RequestVoteArgs, reply *RequestVoteReply)
 		case Leader:
 			l2f(rf)
 		case Follower:
-			stopTimer(rf.timeoutT)
+			stopTimer(rf.f2c)
 		}
 		rf.currentTerm = candidate.Term
 		rf.votedFor = -1
@@ -238,7 +238,7 @@ func (rf *Raft) RequestVote(candidate *RequestVoteArgs, reply *RequestVoteReply)
 	if (rf.votedFor == -1 ||
 		rf.votedFor == candidate.CandidateID) &&
 		up2date(rf, candidate) {
-		resetTimer(rf.timeoutT, timeOut())
+		resetTimer(rf.f2c, timeOut())
 		rf.currentTerm = candidate.Term
 		rf.votedFor = candidate.CandidateID
 		reply.Term = term
@@ -294,15 +294,11 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 
 	DPrintf("Raft:%d(term:%d)(status:%d)...Append<-Raft:%d(term:%d)\n",
 		rf.me, rf.currentTerm, rf.status, leader.LeaderID, leader.Term)
-	//fmt.Printf("RequestAppend: %d:%d  request from  ... %d:%d \n",
-	//	rf.me, rf.currentTerm, leader.LeaderID, leader.Term)
 	//Your code here (2A, 2B).
 	//LAB 2A
 	//Reply false if args.Term < rf.currentTerm (5.1)
 	term := rf.currentTerm
 	if leader.Term < term {
-		//fmt.Printf("RequestAppend: %d:%d>  reject from  ... %d:%d \n",
-		//	rf.me, rf.currentTerm, leader.LeaderID, leader.Term)
 		reply.Term = term
 		reply.Success = false
 		return
@@ -324,7 +320,7 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 	//Heartbeats - Append RPC with no log entry
 	//Reset this follow's timer
 	if len(leader.Entries) == 0 {
-		resetTimer(rf.timeoutT, timeOut())
+		resetTimer(rf.f2c, timeOut())
 		rf.currentTerm = leader.Term
 		reply.Term = term
 		reply.Success = true
@@ -374,14 +370,14 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	// Your code here, if desired.
-	stopTimer(rf.timeoutT)
-	if rf.c2cTimer != nil {
-		stopTimer(rf.c2cTimer)
+	stopTimer(rf.f2c)
+	if rf.c2c != nil {
+		stopTimer(rf.c2c)
 	}
 	if rf.heartbeatT != nil {
 		stopTimer(rf.heartbeatT)
 	}
-	drainChan(rf.victory)
+	drainChan(rf.c2l)
 	drainChan(rf.c2f)
 	drainChan(rf.done)
 }
@@ -433,9 +429,7 @@ func electOnce(rf *Raft) {
 
 	replys := make([]RequestVoteReply, len(rf.peers))
 	peers := rf.peers
-	//fmt.Printf("C2C . . . . . . . . . . . .%d:%d\n", rf.me, rf.currentTerm)
 	DPrintf("Raft:%d(term:%d)(status:%d)...C2C\n", rf.me, rf.currentTerm, rf.status)
-	//fmt.Printf("X2C electing  .............%d:%d\n", rf.me, rf.currentTerm)
 
 	for idx := 0; idx < len(peers); idx++ {
 		if idx == rf.me {
@@ -468,7 +462,7 @@ func electOnce(rf *Raft) {
 			if replys[idx].VoteGranted == true {
 				votedNum++
 				if votedNum >= (len(peers)/2 + 1) {
-					go func() { rf.victory <- true }()
+					go func() { rf.c2l <- true }()
 					return
 				}
 			}
@@ -485,42 +479,35 @@ func f2c(rf *Raft) {
 	rf.Lock()
 	DPrintf("Raft:%d(term:%d)(status:%d)...F2C\n", rf.me, rf.currentTerm, rf.status)
 	//Stop the timer firstly
-	rf.status = Candidate
 	//To begin an election, a follower increments its current
 	//term and transitions to candidate state. It then votes for
 	//itself (5.2)
-	//rf.currentTerm++
+	rf.status = Candidate
 	rf.votedFor = rf.me
-	//resetTimer(rf.timeoutT, timeOut())
-	//drain victory channel because victory will set to false many times
+	//drain c2f channel because victory will set to false many times
 	//when a raftA is candidate and it get reject vote from raftB with bigger term
 	//at the same time a leader(raftC) have been selected and send heartbeat to raftA
-	drainChan(rf.victory)
+	drainChan(rf.c2l)
 	drainChan(rf.c2f)
 	drainChan(rf.done)
 	rf.Unlock()
 
-	rf.c2cTimer = time.NewTimer(time.Duration(0))
+	rf.c2c = time.NewTimer(time.Duration(0))
 	go func() {
 		for {
 			select {
-			case <-rf.victory:
-				stopTimer(rf.c2cTimer)
+			case <-rf.c2l:
+				stopTimer(rf.c2c)
 				c2l(rf)
 				return
 			case <-rf.c2f:
-				stopTimer(rf.c2cTimer)
+				stopTimer(rf.c2c)
 				c2f(rf)
 				go func() { rf.done <- true }()
 				return
-			case <-rf.c2cTimer.C:
-				resetTimer(rf.c2cTimer, timeOut())
-				go func() {
-					//t0 := time.Now()
-					electOnce(rf)
-					//t1 := time.Now()
-					//fmt.Printf("%d The call took %v to run.\n", rf.me, t1.Sub(t0))
-				}()
+			case <-rf.c2c.C:
+				resetTimer(rf.c2c, timeOut())
+				go electOnce(rf)
 			}
 		}
 	}()
@@ -543,9 +530,7 @@ func stopTimer(t *time.Timer) {
 }
 
 func resetTimer(t *time.Timer, d time.Duration) {
-	//fmt.Println("Stop & reset timer.............")
 	stopTimer(t)
-	//t = time.NewTimer(time.Duration(30) * time.Millisecond)
 	t.Reset(d)
 }
 
@@ -601,7 +586,7 @@ func c2l(rf *Raft) {
 	DPrintf("Raft:%d(term:%d)(status:%d)...C2L\n",
 		rf.me, rf.currentTerm, rf.status)
 	//Stop the timeout timer
-	stopTimer(rf.timeoutT)
+	stopTimer(rf.f2c)
 	//candidate to leader
 	rf.status = Leader
 	rf.votedFor = -1
@@ -625,10 +610,9 @@ func c2f(rf *Raft) {
 	rf.status = Follower
 	//rf.currentTerm = rf.currentTerm - 1
 	rf.votedFor = -1
-	resetTimer(rf.timeoutT, timeOut())
+	resetTimer(rf.f2c, timeOut())
 
-	//rf.timeoutT = time.NewTimer(time.Duration(30) * time.Millisecond)
-	fmt.Println("C2F          .............", rf.me)
+	fmt.Println("C2F          ............. ", rf.me)
 }
 
 func l2f(rf *Raft) {
@@ -638,8 +622,8 @@ func l2f(rf *Raft) {
 	//stop the heartbeat
 	stopTimer(rf.heartbeatT)
 	//reset timeout timer
-	resetTimer(rf.timeoutT, timeOut())
-	fmt.Println("L2F          .............", rf.me)
+	resetTimer(rf.f2c, timeOut())
+	fmt.Println("L2F          ............. ", rf.me)
 }
 
 func drainChan(c chan bool) {
@@ -674,12 +658,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.votedFor = -1
-	//rf.timeoutT = time.NewTimer(timeOut())
-	//array := [3]int{188, 176, 179}
 	//array := [3]int{149, 149, 149}
-	//rf.timeoutT = time.NewTimer(time.Duration(array[me]) * time.Millisecond)
-	rf.timeoutT = time.NewTimer(timeOut())
-	rf.victory = make(chan bool)
+	//rf.f2c = time.NewTimer(time.Duration(array[me]) * time.Millisecond)
+	rf.f2c = time.NewTimer(timeOut())
+	rf.c2l = make(chan bool)
 	rf.done = make(chan bool)
 	rf.c2f = make(chan bool)
 	rf.log = make(map[int]Entry)
@@ -692,9 +674,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			select {
 			case <-applyCh:
 				fmt.Println("Receive a apply from leader")
-			case <-rf.timeoutT.C:
-				//fmt.Printf("%d timeout     .............\n", rf.me)
-				f2c(rf)
+			case <-rf.f2c.C:
+				go f2c(rf)
 			default:
 			}
 		}
