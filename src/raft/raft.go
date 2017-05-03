@@ -306,15 +306,18 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 	//LAB 2A
 	//If RPC request or response contains term T > currentTerm:
 	//set currentTerm = T, convert to follower (5.1)
-	if leader.Term > term {
+	if leader.Term >= term {
 		switch rf.status {
 		case Candidate:
 			rf.c2f <- true
 			<-rf.done
 		case Leader:
 			l2f(rf)
+		case Follower:
+			stopTimer(rf.f2c)
 		}
 		rf.currentTerm = leader.Term
+		rf.votedFor = -1
 	}
 
 	//Heartbeats - Append RPC with no log entry
@@ -536,6 +539,11 @@ func resetTimer(t *time.Timer, d time.Duration) {
 
 //Do not retry if the RequestAppend RPC do not receive a response
 func beatOnce(rf *Raft) {
+	rf.Lock()
+	defer rf.Unlock()
+	if rf.status != Leader {
+		return
+	}
 	currentTerm := rf.currentTerm
 	//Args for heartbeat
 	args := &RequestAppendArgs{}
@@ -589,7 +597,7 @@ func c2l(rf *Raft) {
 	stopTimer(rf.f2c)
 	//candidate to leader
 	rf.status = Leader
-	rf.votedFor = -1
+	//rf.votedFor = -1
 	//Send the heart beat to all the others
 	heartbeatD := time.Duration(HeartBeats) * time.Millisecond
 	rf.heartbeatT = time.NewTimer(time.Duration(0))
@@ -658,6 +666,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.votedFor = -1
+	//array := [3]int{149, 145, 140}
 	//array := [3]int{149, 149, 149}
 	//rf.f2c = time.NewTimer(time.Duration(array[me]) * time.Millisecond)
 	rf.f2c = time.NewTimer(timeOut())
