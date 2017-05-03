@@ -223,8 +223,11 @@ func (rf *Raft) RequestVote(candidate *RequestVoteArgs, reply *RequestVoteReply)
 			<-rf.done
 		case Leader:
 			l2f(rf)
+		case Follower:
+			stopTimer(rf.timeoutT)
 		}
 		rf.currentTerm = candidate.Term
+		rf.votedFor = -1
 	}
 	//LAB 2A
 	//If votedFor is null or candidateId, and candidate’s log is at
@@ -240,8 +243,12 @@ func (rf *Raft) RequestVote(candidate *RequestVoteArgs, reply *RequestVoteReply)
 		rf.votedFor = candidate.CandidateID
 		reply.Term = term
 		reply.VoteGranted = true
+		DPrintf("Raft:%d(term:%d)(status:%d)...VOTE<-Raft:%d(term:%d)VotedFor\n",
+			rf.me, rf.currentTerm, rf.status, candidate.CandidateID, candidate.Term)
 	} else {
 		reply.VoteGranted = false
+		DPrintf("Raft:%d(term:%d)(status:%d)...VOTE<-Raft:%d(term:%d)NoVotedFor\n",
+			rf.me, rf.currentTerm, rf.status, candidate.CandidateID, candidate.Term)
 	}
 	return
 }
@@ -398,6 +405,7 @@ const (
 func timeOut() time.Duration {
 	rand.Seed(time.Now().UTC().UnixNano())
 	randNum := rand.Intn(TimeTo-TimeFrom) + TimeFrom
+	//randNum = 149
 	//duration := randNum * time.Millisecond
 	//fmt.Println(randNum)
 	return time.Duration(randNum) * time.Millisecond
