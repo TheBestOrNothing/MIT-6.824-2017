@@ -44,7 +44,7 @@ type ApplyMsg struct {
 //
 type Entry struct {
 	Term    int
-	Command int
+	Command interface{}
 }
 
 //
@@ -70,6 +70,14 @@ type Raft struct {
 	c2l         chan bool     //Channel for victory in votting
 	c2f         chan bool     //Channel for victory in votting
 	done        chan bool     //Done means candiate status changed to others
+
+	//LAB 2B - Volatile state on all servers
+	commitIndex int
+	lastApplied int
+
+	//LAB 2B - volatile state on leaders
+	nextIndex  []int
+	matchIndex []int
 }
 
 // return currentTerm and whether this server
@@ -150,6 +158,10 @@ type RequestAppendArgs struct {
 	Term     int     //leader's term
 	LeaderID int     //leader's id,so follower can redirect clients
 	Entries  []Entry //log entries to store(empty for heartbeat)
+	//LAB 2B
+	PrevLogIndex int
+	PrevLogTerm  int
+	LeaderCommit int
 }
 
 //
@@ -356,13 +368,51 @@ func (rf *Raft) sendRequestAppend(server int, args *RequestAppendArgs, reply *Re
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+	//LAB 2B - 1. Client request contains a command to be executed
+	//            by the replicated stated machines.
 	index := -1
 	term := -1
 	isLeader := true
 
 	// Your code here (2B).
+	if rf.status != Leader {
+		return index, term, false
+	}
 
-	return index, term, isLeader
+	//LAB 2B - 2. The leader append the cmd to its log as a new entry
+	index = len + 1
+	term = rf.currentTerm
+	len, prevIdx := len(rf.log)
+	entry := Entry{term, command}
+	rf.log[index] = entry
+	//entries := []Entry{entry}
+
+	//LAB 2B - 3. Issue AppendEnties RPC in parallel to each of the other servers
+	//			  to replicate the entry
+	pervIndex := 0
+	prevTerm := 0
+	if len != 0 {
+		pervIndex = prevIdx
+		prevTerm = rf.log[prevIdx].Term
+	}
+	args := &RequestAppendArgs{
+		Term:         term,
+		LeaderID:     rf.me,
+		Entries:      []Entry{entry},
+		PrevLogIndex: pervIndex,
+		PrevLogTerm:  pervTerm,
+		LeaderCommit: rf.commitIndex,
+	}
+	//LAB 2B - 4. When themEntry have been saftly replicated,
+	//			  the leader apply the entry to its state machine
+	//LAB 2B - 5. Return the results of that exection to the client
+	if AppendEntries(rf, args) {
+		rf.commitIndex += 1
+		return index, term, isLeader
+	} else {
+		return -1, -1, false
+	}
+
 }
 
 //
@@ -587,6 +637,68 @@ func beatOnce(rf *Raft) {
 	} //end for
 }
 
+func AppendEntries(rf *Raft, args *RequestAppendArgs) bool {
+	rf.Lock()
+	defer rf.Unlock()
+	if rf.status != Leader {
+		return false
+	}
+	currentTerm := rf.currentTerm
+	me := rf.me
+	appendNum := 1
+	var mutex = &sync.Mutex{}
+	appendOK := make(chan bool)
+
+	//Prepare for all the replys
+	replys := make([]RequestAppendReply, len(rf.peers))
+	peers := rf.peers
+
+	for idx := 0; idx < len(rf.peers); idx++ {
+		if idx == me {
+			continue
+		}
+		go func(idx int) {
+		ReAppend:
+			taskState := peers[idx].Call("Raft.RequestAppend", args, &replys[idx])
+			//5.3 If followers crash or run slowly,
+			//or if network packets are lost, the leader retries Append-
+			//Entries RPCs indefinitely (even after it has responded to
+			//the client) until all followers eventually store all log entries.
+			if taskState == false {
+				goto ReAppend
+			}
+
+			if replys[idx].Term > currentTerm {
+				l2f(rf)
+				appendOK <- false
+			}
+
+			if replys[idx].Success {
+				mutex.Lock()
+				appendNum++
+				if appendNum >= (len(peers)/2 + 1) {
+					appendOK <- true
+				}
+				mutex.Unlock()
+			}
+
+		}(idx)
+	} //end for
+
+	for {
+		select {
+		case ok := <-appendOK:
+			if ok {
+				return true
+			} else {
+				return false
+			}
+		default:
+		}
+	}
+
+}
+
 func c2l(rf *Raft) {
 	rf.Lock()
 	defer rf.Unlock()
@@ -674,6 +786,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.done = make(chan bool)
 	rf.c2f = make(chan bool)
 	rf.log = make(map[int]Entry)
+	//LAB 2B - Volatile state on all servers
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	rf.nextIndex = []int{}
+	rf.matchIndex = []int{}
 
 	// Your initialization code here (2A, 2B, 2C).
 	//LAB 2A
