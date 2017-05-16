@@ -1,0 +1,20 @@
+1. How to add the code to the git repository?
+
+git add .  							 //If you add new files
+git commit -am 'Lab2 - Part III ...' //commit all the changes
+git push origin master				 //push the code to the github
+TheBestOrNothing
+capital letter and number in password
+
+2. How to create a tag??
+git tag -l 				//Show all the tags
+git tag -a Lab2A -m "Lab2A Done"
+git push origin --tags
+
+3. How to checkout a tag by tagname
+  git checkout -b 2Aversion  Lab1
+//git checkout -b brachName  tagName
+
+//reference
+https://help.github.com/articles/adding-an-existing-project-to-github-using-the-command-line/
+https://git-scm.com/book/en/v2/Git-Basics-Tagging
