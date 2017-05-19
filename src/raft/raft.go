@@ -19,6 +19,7 @@ package raft
 import (
 	"fmt"
 	"labrpc"
+	"math"
 	"math/rand"
 	"sync"
 	"time"
@@ -73,7 +74,10 @@ type Raft struct {
 	lastApplied int
 
 	//LAB 2B - volatile state on leaders
-	nextIndex  []int
+	//for each server, index of the next log entry to send to that server
+	//(initialized to leader last log index + 1)
+	nextIndex []int
+	//for each server, index of highest log entry known to be replicated on server
 	matchIndex []int
 }
 
@@ -89,6 +93,7 @@ func (rf *Raft) GetState() (int, bool) {
 	} else {
 		return rf.currentTerm, false
 	}
+
 }
 
 //
@@ -178,27 +183,21 @@ type RequestAppendReply struct {
 // Is candidate's log up to date ? (5.4.1)
 //
 func up2date(rf *Raft, candidate *RequestVoteArgs) bool {
-	return true
 
 	lastEntry := rf.log[len(rf.log)-1]
 
 	//If the logs have last entries with different terms,
 	//then the log with the later term is more up2date(5.4.1)
-	if lastEntry.Term < candidate.LastLogTerm {
+	if candidate.LastLogTerm > lastEntry.Term {
 		return true
 	}
 
 	//The candidate's log end with the same term,
 	//then whichever log is longer is more up2date
-	if lastEntry.Term == candidate.LastLogTerm {
-		lenLog := len(rf.log)
-		if lenLog <= candidate.LastLogIndex+1 {
-			return true
-		} else {
-			return false
-		}
+	if candidate.LastLogTerm == lastEntry.Term &&
+		candidate.LastLogIndex+1 >= len(rf.log) {
+		return true
 	}
-
 	return false
 }
 
@@ -346,16 +345,17 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 	resetTimer(rf.f2c, timeOut())
 	rf.currentTerm = leader.Term
 	reply.Term = term
-	rf.commitIndex = leader.LeaderCommit
+	//rf.commitIndex = leader.LeaderCommit
 	if len(leader.Entries) == 0 {
-		//resetTimer(rf.f2c, timeOut())
-		//rf.currentTerm = leader.Term
-		//reply.Term = term
 		reply.Success = true
 	} else {
 		entry, ok := rf.log[leader.PrevLogIndex]
 		//fmt.Printf("Raft.RequestAppend: Return false preLogIdx:%d, preLogTerm:%d, entryTerm:%d\n", leader.PrevLogIndex, leader.PrevLogTerm, entry.Term)
 		if !ok || entry.Term != leader.PrevLogTerm {
+			for idx := leader.PrevLogIndex; idx < len(rf.log); idx++ {
+				delete(rf.log, idx)
+				fmt.Printf("Raft.RequestAppend: Warning delete entries\n")
+			}
 			reply.Success = false
 			return
 		}
@@ -363,9 +363,16 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 		for idx, e := range leader.Entries {
 			rf.log[leader.PrevLogIndex+idx+1] = e
 		}
+		for k, v := range rf.log {
+			fmt.Printf("Raft.RequestAppend: follower:%d, %d -> %d\n", rf.me, k, v)
+		}
 		reply.Success = true
-		return
 
+	}
+	if leader.LeaderCommit > rf.commitIndex {
+		f := math.Min(float64(leader.LeaderCommit), float64(len(rf.log)-1))
+		rf.commitIndex = int(f)
+		//fmt.Printf("Raft.RequestAppend: Update commitIndex leaderCommit:%d, myCommit:%d\n", leader.LeaderCommit, rf.commitIndex)
 	}
 	return
 }
@@ -378,24 +385,58 @@ func (rf *Raft) sendRequestAppend(server int, args *RequestAppendArgs, reply *Re
 	return ok
 }
 
+//update the committed index for leader
+//If there exists an N such that N > commitIndex, a majority
+//of matchIndex[i] ≥ N, and log[N].term == currentTerm:
+//set commitIndex = N (§5.3, §5.4).
+func updateCommitIndex(rf *Raft) {
+	rf.Lock()
+	defer rf.Unlock()
+	cmtIdx := rf.commitIndex
+	cmtNum := 0
+	for k1, v1 := range rf.matchIndex {
+		DPrintf("updateCommitIndex: matchIndex -- k:%d -> v:%d\n", k1, v1)
+	}
+	for {
+		cmtIdx++
+		cmtNum = 0
+		DPrintf("updateCommitIndex:1 commitIdx:%d \n", cmtIdx)
+		for _, v := range rf.matchIndex {
+			if v >= cmtIdx {
+				cmtNum++
+			}
+		}
+
+		if cmtNum >= (len(rf.peers)/2 + 1) {
+			continue
+		} else {
+			break
+		}
+	}
+
+	if rf.commitIndex < cmtIdx-1 {
+		rf.commitIndex = cmtIdx - 1
+		DPrintf("updateCommitIndex:2 commitIdx:%d \n", rf.commitIndex)
+	}
+}
+
 //Send entries from leader to follower. If entries commited,
 //apply the entires to the status machine
 func sendEntries(rf *Raft, args *RequestAppendArgs) {
-	//rf.Lock()
-	//defer rf.Unlock()
+	rf.Lock()
+	defer rf.Unlock()
 	if rf.status != Leader {
 		return
 	}
 	currentTerm := rf.currentTerm
 	me := rf.me
-	appendNum := 1
-	var mutex = &sync.Mutex{}
-	var once sync.Once
+	logLen := len(rf.log)
 
 	//Prepare for all the replys
 	replys := make([]RequestAppendReply, len(rf.peers))
 	peers := rf.peers
 
+	DPrintf("sendEntires: 1 Leader.commitIndex%d\n", rf.commitIndex)
 	for idx := 0; idx < len(rf.peers); idx++ {
 		if idx == me {
 			continue
@@ -420,18 +461,32 @@ func sendEntries(rf *Raft, args *RequestAppendArgs) {
 				return
 			}
 
-			if replys[idx].Success {
-				mutex.Lock()
-				appendNum++
-				mutex.Unlock()
-				//if appendNum >= (len(peers)/2 + 1) {
-				if appendNum == len(peers) {
-					//fmt.Printf("sendEntries1: commitIdx:%d  entryLen:%d\n", rf.commitIndex, len(args.Entries))
-					once.Do(func() {
-						rf.commitIndex += len(args.Entries)
-					})
-					return
+			if !replys[idx].Success {
+				DPrintf("sendEntires :Reply but not success\n")
+
+				rf.nextIndex[idx]--
+				prevIndex := rf.nextIndex[idx] - 1
+				prevTerm := rf.log[prevIndex].Term
+				entries := []Entry{}
+				for idx := prevIndex + 1; idx < logLen; idx++ {
+					entries = append(entries, rf.log[idx])
 				}
+				args = &RequestAppendArgs{
+					Term:         rf.currentTerm,
+					LeaderID:     rf.me,
+					Entries:      entries,
+					PrevLogIndex: prevIndex,
+					PrevLogTerm:  prevTerm,
+					LeaderCommit: rf.commitIndex,
+				}
+				goto ReSent
+			}
+
+			if replys[idx].Success {
+				rf.matchIndex[idx] = logLen - 1
+				rf.nextIndex[idx] = logLen
+				updateCommitIndex(rf)
+				return
 			}
 
 		}(idx)
@@ -461,18 +516,18 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		return index, term, false
 	}
 
-	len := len(rf.log)
-	index = len
+	index = rf.nextIndex[rf.me]
 	term = rf.currentTerm
 	entry := Entry{Term: term, Command: command}
 	//fmt.Printf("Raft.Start0: idx:%d, cmd:%d, term:%d\n", index, entry.Command.(int), entry.Term)
 	rf.log[index] = entry
+	rf.matchIndex[rf.me] = index
 	//fmt.Printf("Raft.Start1 : len:%d, index:%d, term:%d \n", len, index, term)
 	//entries := []Entry{entry}
 
 	//LAB 2B - 3. Issue AppendEnties RPC in parallel to each of the other servers
 	//			  to replicate the entry
-	prevIndex := len - 1
+	prevIndex := rf.nextIndex[rf.me] - 1
 	prevTerm := rf.log[prevIndex].Term
 
 	//fmt.Printf("Raft.Start : catch a leader, and pervIndex:%d, prevTerm:%d \n", prevIndex, prevTerm)
@@ -487,6 +542,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	//LAB 2B - 4. When themEntry have been saftly replicated,
 	//			  the leader apply the entry to its state machine
 	go sendEntries(rf, args)
+	rf.nextIndex[rf.me] = index + 1
 
 	//LAB 2B - 5. Return the results of that exection to the client
 	return index, term, isLeader
@@ -723,6 +779,9 @@ func c2l(rf *Raft) {
 		}
 	}()
 	//fmt.Println("C2L          ............. ", rf.me)
+	for k, _ := range rf.nextIndex {
+		rf.nextIndex[k] = len(rf.log)
+	}
 }
 
 func c2f(rf *Raft) {
@@ -735,7 +794,6 @@ func c2f(rf *Raft) {
 	//rf.currentTerm = rf.currentTerm - 1
 	rf.votedFor = -1
 	resetTimer(rf.f2c, timeOut())
-
 	//fmt.Println("C2F          ............. ", rf.me)
 }
 
@@ -796,8 +854,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	//Lab 2B
 	rf.commitIndex = 0
 	rf.lastApplied = 0
-	rf.nextIndex = []int{}
-	rf.matchIndex = []int{}
+	rf.nextIndex = make([]int, len(rf.peers))
+	rf.matchIndex = make([]int, len(rf.peers))
 	//Lab 2B init the rf.log[0].Term = 0
 	entry := Entry{Term: 0}
 	rf.log[0] = entry
@@ -812,13 +870,17 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				go f2c(rf)
 			default:
 				for idx := rf.lastApplied; idx < rf.commitIndex; idx++ {
-					//fmt.Printf("Applying: lastApplied:%d, commitIdx:%d\n", idx, rf.commitIndex)
+					fmt.Printf("Applying1:%d: lastApplied:%d, commitIdx:%d\n", rf.me, rf.lastApplied, rf.commitIndex)
+					printLogs(rf)
 					go func(index int) {
 						//fmt.Printf("Applying: idx:%d, entry:%v\n", index+1, rf.log[index+1])
 						applyCh <- ApplyMsg{Index: index + 1, Command: rf.log[index+1].Command}
 					}(idx)
 				}
-				rf.lastApplied = rf.commitIndex
+				if rf.lastApplied < rf.commitIndex {
+					rf.lastApplied = rf.commitIndex
+					fmt.Printf("Applying2:%d: lastApplied:%d, commitIdx:%d\n", rf.me, rf.lastApplied, rf.commitIndex)
+				}
 			}
 		}
 	}()
@@ -831,7 +893,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 func printLogs(rf *Raft) {
 	for key, e := range rf.log {
-		fmt.Printf("Applying: RaftID:%d, idx:%d, entry:%v\n",
+		fmt.Printf("PrintLogs: Raft:%d, %d -> %v\n",
 			rf.me, key, e)
 	}
 }
