@@ -79,6 +79,7 @@ type Raft struct {
 	nextIndex []int
 	//for each server, index of highest log entry known to be replicated on server
 	matchIndex []int
+	//entriesChan chan ApplyMsg
 }
 
 // return currentTerm and whether this server
@@ -354,18 +355,19 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 		if !ok || entry.Term != leader.PrevLogTerm {
 			for idx := leader.PrevLogIndex; idx < len(rf.log); idx++ {
 				delete(rf.log, idx)
-				fmt.Printf("Raft.RequestAppend: Warning delete entries\n")
+				//fmt.Printf("Raft.RequestAppend: Warning delete entries\n")
 			}
 			reply.Success = false
 			return
 		}
 
+		//for k, v := range leader.Entries {
+		//	fmt.Printf("Raft.RequestAppend: follower:%d appending, %d -> %d\n", rf.me, k, v)
+		//}
 		for idx, e := range leader.Entries {
 			rf.log[leader.PrevLogIndex+idx+1] = e
 		}
-		for k, v := range rf.log {
-			fmt.Printf("Raft.RequestAppend: follower:%d, %d -> %d\n", rf.me, k, v)
-		}
+		//printLogs(rf)
 		reply.Success = true
 
 	}
@@ -394,9 +396,9 @@ func updateCommitIndex(rf *Raft) {
 	defer rf.Unlock()
 	cmtIdx := rf.commitIndex
 	cmtNum := 0
-	for k1, v1 := range rf.matchIndex {
-		DPrintf("updateCommitIndex: matchIndex -- k:%d -> v:%d\n", k1, v1)
-	}
+	//for k1, v1 := range rf.matchIndex {
+	//	DPrintf("updateCommitIndex: matchIndex -- k:%d -> v:%d\n", k1, v1)
+	//}
 	for {
 		cmtIdx++
 		cmtNum = 0
@@ -416,7 +418,7 @@ func updateCommitIndex(rf *Raft) {
 
 	if rf.commitIndex < cmtIdx-1 {
 		rf.commitIndex = cmtIdx - 1
-		DPrintf("updateCommitIndex:2 commitIdx:%d \n", rf.commitIndex)
+		//fmt.Printf("updateCommitIndex: commitIdx:%d \n", rf.commitIndex)
 	}
 }
 
@@ -442,12 +444,14 @@ func sendEntries(rf *Raft, args *RequestAppendArgs) {
 			continue
 		}
 		go func(idx int) {
+			retryArgs := &RequestAppendArgs{}
+			retryArgs = args
 		ReSent:
 			DPrintf("sendEntires :%d -> %d -- Raft:%d(T:%2d)(S:%d)->Raft:%d\n",
 				rf.me, idx,
 				rf.me, rf.currentTerm, rf.status, idx)
 
-			taskState := peers[idx].Call("Raft.RequestAppend", args, &replys[idx])
+			taskState := peers[idx].Call("Raft.RequestAppend", retryArgs, &replys[idx])
 			//5.3 If followers crash or run slowly,
 			//or if network packets are lost, the leader retries Append-
 			//Entries RPCs indefinitely (even after it has responded to
@@ -462,16 +466,15 @@ func sendEntries(rf *Raft, args *RequestAppendArgs) {
 			}
 
 			if !replys[idx].Success {
-				DPrintf("sendEntires :Reply but not success\n")
-
 				rf.nextIndex[idx]--
+				//fmt.Printf("sendEntires: Raft:%d Reply but not success, nextIndex:%d\n", idx, rf.nextIndex[idx])
 				prevIndex := rf.nextIndex[idx] - 1
 				prevTerm := rf.log[prevIndex].Term
 				entries := []Entry{}
 				for idx := prevIndex + 1; idx < logLen; idx++ {
 					entries = append(entries, rf.log[idx])
 				}
-				args = &RequestAppendArgs{
+				retryArgs = &RequestAppendArgs{
 					Term:         rf.currentTerm,
 					LeaderID:     rf.me,
 					Entries:      entries,
@@ -856,6 +859,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.lastApplied = 0
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
+	//rf.entriesChan = make(chan ApplyMsg, 100)
 	//Lab 2B init the rf.log[0].Term = 0
 	entry := Entry{Term: 0}
 	rf.log[0] = entry
@@ -869,17 +873,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			case <-rf.f2c.C:
 				go f2c(rf)
 			default:
-				for idx := rf.lastApplied; idx < rf.commitIndex; idx++ {
-					fmt.Printf("Applying1:%d: lastApplied:%d, commitIdx:%d\n", rf.me, rf.lastApplied, rf.commitIndex)
-					printLogs(rf)
-					go func(index int) {
-						//fmt.Printf("Applying: idx:%d, entry:%v\n", index+1, rf.log[index+1])
-						applyCh <- ApplyMsg{Index: index + 1, Command: rf.log[index+1].Command}
-					}(idx)
-				}
-				if rf.lastApplied < rf.commitIndex {
-					rf.lastApplied = rf.commitIndex
-					fmt.Printf("Applying2:%d: lastApplied:%d, commitIdx:%d\n", rf.me, rf.lastApplied, rf.commitIndex)
+				if index := rf.lastApplied; index < rf.commitIndex {
+					//fmt.Printf("Applying: Raft:%d: lastApplied:%d, commitIdx:%d\n", rf.me, rf.lastApplied, rf.commitIndex)
+					applyCh <- ApplyMsg{Index: index + 1, Command: rf.log[index+1].Command}
+					rf.lastApplied++
+					//printLogs(rf)
 				}
 			}
 		}
