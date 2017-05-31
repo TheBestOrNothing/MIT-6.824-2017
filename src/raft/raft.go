@@ -312,11 +312,11 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 	DPrintf("RPC(Append) :%d <- %d -- Raft:%d(T:%2d)(S:%d)<-Raft:%d(T:%2d)(Len:%d)\n",
 		rf.me, leader.LeaderID,
 		rf.me, rf.currentTerm, rf.status, leader.LeaderID, leader.Term, len(leader.Entries))
-	if len(leader.Entries) > 0 {
-		fmt.Printf("RPC(Append) :%d <- %d -- Raft:%d(T:%2d)(S:%d)<-Raft:%d(T:%2d)(Len:%d)(cmd:%v)(commitIndex:%d)\n",
-			rf.me, leader.LeaderID,
-			rf.me, rf.currentTerm, rf.status, leader.LeaderID, leader.Term, len(leader.Entries), leader.Entries[0], leader.LeaderCommit)
-	}
+	//if len(leader.Entries) > 0 {
+	//fmt.Printf("RPC(Append) :%d <- %d -- Raft:%d(T:%2d)(S:%d)<-Raft:%d(T:%2d)(Len:%d)(cmd:%v)(commitIndex:%d)\n",
+	//	rf.me, leader.LeaderID,
+	//	rf.me, rf.currentTerm, rf.status, leader.LeaderID, leader.Term, len(leader.Entries), leader.Entries[0], leader.LeaderCommit)
+	//}
 	//Your code here (2A, 2B).
 	//LAB 2A
 	//Reply false if args.Term < rf.currentTerm (5.1)
@@ -361,6 +361,7 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 			//fmt.Printf("Raft.RequestAppend: Warning delete entries idx:%d, len:%d\n", idx, len(rf.log))
 		}
 		reply.Success = false
+		return
 	}
 
 	//for k, v := range leader.Entries {
@@ -375,7 +376,7 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 	if leader.LeaderCommit > rf.commitIndex {
 		f := math.Min(float64(leader.LeaderCommit), float64(len(rf.log)-1))
 		rf.commitIndex = int(f)
-		fmt.Printf("Raft.RequestAppend: Follow:%d,Update commitIndex leaderCommit:%d, myCommit:%d\n", rf.me, leader.LeaderCommit, rf.commitIndex)
+		//fmt.Printf("Raft.RequestAppend: Follow:%d,Update commitIndex leaderCommit:%d, myCommit:%d\n", rf.me, leader.LeaderCommit, rf.commitIndex)
 	}
 	return
 }
@@ -411,7 +412,7 @@ func updateCommitIndex(rf *Raft) {
 		}
 
 		if cmtNum >= (len(rf.peers)/2 + 1) {
-			fmt.Printf("updateCommitIndex: log[N].Term:%d , currentTerm:%d\n", rf.log[cmtIdx].Term, rf.currentTerm)
+			//fmt.Printf("updateCommitIndex: log[N].Term:%d , currentTerm:%d\n", rf.log[cmtIdx].Term, rf.currentTerm)
 			continue
 		} else {
 			break
@@ -420,7 +421,7 @@ func updateCommitIndex(rf *Raft) {
 
 	if rf.commitIndex < cmtIdx-1 {
 		rf.commitIndex = cmtIdx - 1
-		fmt.Printf("updateCommitIndex: commitIdx:%d \n", rf.commitIndex)
+		//fmt.Printf("updateCommitIndex: commitIdx:%d \n", rf.commitIndex)
 	}
 }
 
@@ -435,13 +436,14 @@ func sendEntries(rf *Raft) {
 	currentTerm := rf.currentTerm
 	//me := rf.me
 	logLen := len(rf.log)
+	peersLen := len(rf.peers)
 
 	//Prepare for all the replys
 	replys := make([]RequestAppendReply, len(rf.peers))
 	peers := rf.peers
 
 	//DPrintf("sendEntires: 1 Leader.commitIndex%d\n", rf.commitIndex)
-	for idx := 0; idx < len(rf.peers); idx++ {
+	for idx := 0; idx < peersLen; idx++ {
 		if idx == rf.me {
 			continue
 		}
@@ -475,6 +477,7 @@ func sendEntries(rf *Raft) {
 			//Entries RPCs indefinitely (even after it has responded to
 			//the client) until all followers eventually store all log entries.
 			if taskState == false {
+				return
 				goto ReSent
 			}
 
@@ -484,7 +487,7 @@ func sendEntries(rf *Raft) {
 			}
 
 			if !replys[idx].Success {
-				fmt.Printf("sendEntires: Raft:%d Reply but not success, nextIndex:%d\n", idx, rf.nextIndex[idx])
+				//fmt.Printf("sendEntires: Raft:%d Reply but not success, nextIndex:%d\n", idx, rf.nextIndex[idx])
 				rf.nextIndex[idx]--
 				goto ReSent
 			}
@@ -526,7 +529,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index = rf.nextIndex[rf.me]
 	term = rf.currentTerm
 	entry := Entry{Term: term, Command: command}
-	fmt.Printf("Raft.Start: Raft:%d, idx:%d, cmd:%d, term:%d\n", rf.me, index, entry.Command.(int), entry.Term)
+	//fmt.Printf("Raft.Start: Raft:%d, idx:%d, cmd:%d, term:%d\n", rf.me, index, entry.Command.(int), entry.Term)
 	rf.log[index] = entry
 	rf.matchIndex[rf.me] = index
 	rf.nextIndex[rf.me] = index + 1
@@ -538,7 +541,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	//LAB 2B - 4. When themEntry have been saftly replicated,
 	//			  the leader apply the entry to its state machine
-	go sendEntries(rf)
+	//go sendEntries(rf)
 
 	//LAB 2B - 5. Return the results of that exection to the client
 	return index, term, isLeader
@@ -772,7 +775,7 @@ func c2l(rf *Raft) {
 		return
 	}
 	DPrintf("C2L........  %d(T:%2d)(S:%d)\n", rf.me, rf.currentTerm, rf.status)
-	fmt.Printf("C2L........  %d(T:%2d)(S:%d)\n", rf.me, rf.currentTerm, rf.status)
+	//fmt.Printf("C2L........  %d(T:%2d)(S:%d)\n", rf.me, rf.currentTerm, rf.status)
 	//Stop the timeout timer
 	stopTimer(rf.f2c)
 	//candidate to leader
@@ -786,7 +789,8 @@ func c2l(rf *Raft) {
 			select {
 			case <-rf.heartbeatT.C:
 				resetTimer(rf.heartbeatT, heartbeatD)
-				go func() { beatOnce(rf) }()
+				//go func() { beatOnce(rf) }()
+				go sendEntries(rf)
 			}
 
 		}
@@ -816,7 +820,7 @@ func l2f(rf *Raft) {
 		return
 	}
 	DPrintf("L2F........  %d(T:%2d)(S:%d)\n", rf.me, rf.currentTerm, rf.status)
-	fmt.Printf("L2F........  %d(T:%2d)(S:%d)\n", rf.me, rf.currentTerm, rf.status)
+	//fmt.Printf("L2F........  %d(T:%2d)(S:%d)\n", rf.me, rf.currentTerm, rf.status)
 	rf.status = Follower
 	rf.votedFor = -1
 	//stop the heartbeat
