@@ -526,7 +526,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index = rf.nextIndex[rf.me]
 	term = rf.currentTerm
 	entry := Entry{Term: term, Command: command}
-	//fmt.Printf("Raft.Start: idx:%d, cmd:%d, term:%d\n", index, entry.Command.(int), entry.Term)
+	fmt.Printf("Raft.Start: Raft:%d, idx:%d, cmd:%d, term:%d\n", rf.me, index, entry.Command.(int), entry.Term)
 	rf.log[index] = entry
 	rf.matchIndex[rf.me] = index
 	rf.nextIndex[rf.me] = index + 1
@@ -718,6 +718,9 @@ func beatOnce(rf *Raft) {
 			prevTerm := rf.log[prevIndex].Term
 			entries := []Entry{}
 
+			for index := prevIndex + 1; index < len(rf.log); index++ {
+				entries = append(entries, rf.log[index])
+			}
 			//for index := prevIndex + 1; index < rf.commitIndex; index++ {
 			//	entries = append(entries, rf.log[index])
 			//}
@@ -882,10 +885,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				go f2c(rf)
 			default:
 				if index := rf.lastApplied; index < rf.commitIndex {
-					fmt.Printf("Applying: Raft:%d: lastApplied:%d, commitIdx:%d\n", rf.me, rf.lastApplied, rf.commitIndex)
+					//fmt.Printf("Applying: Raft:%d: lastApplied:%d, commitIdx:%d\n", rf.me, rf.lastApplied, rf.commitIndex)
 					applyCh <- ApplyMsg{Index: index + 1, Command: rf.log[index+1].Command}
 					rf.lastApplied++
-					printLogs(rf)
+					//printLogs(rf)
 				}
 			}
 		}
