@@ -17,6 +17,8 @@ package raft
 //   in the same server.
 //
 import (
+	"bytes"
+	"encoding/gob"
 	"fmt"
 	"labrpc"
 	"math"
@@ -89,6 +91,7 @@ func (rf *Raft) GetState() (int, bool) {
 	rf.Unlock()
 
 	// Your code here (2A).
+	return rf.currentTerm, rf.status == Leader
 	if rf.status == Leader {
 		return rf.currentTerm, true
 	} else {
@@ -103,29 +106,28 @@ func (rf *Raft) GetState() (int, bool) {
 // see paper's Figure 2 for a description of what should be persistent.
 //
 func (rf *Raft) persist() {
-	// Your code here (2C).
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := gob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := gob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 //
 // restore previously persisted state.
 //
 func (rf *Raft) readPersist(data []byte) {
-	// Your code here (2C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := gob.NewDecoder(r)
-	// d.Decode(&rf.xxx)
-	// d.Decode(&rf.yyy)
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
+
+	r := bytes.NewBuffer(data)
+	d := gob.NewDecoder(r)
+	d.Decode(&rf.currentTerm)
+	d.Decode(&rf.votedFor)
+	d.Decode(&rf.log)
 }
 
 //
@@ -308,6 +310,7 @@ func appendEntries(rf *Raft, leader *RequestAppendArgs) {
 func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendReply) {
 	rf.Lock()
 	defer rf.Unlock()
+	defer rf.persist()
 
 	DPrintf("RPC(Append) :%d <- %d -- Raft:%d(T:%2d)(S:%d)<-Raft:%d(T:%2d)(Len:%d)\n",
 		rf.me, leader.LeaderID,
@@ -317,7 +320,6 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 	//	rf.me, leader.LeaderID,
 	//	rf.me, rf.currentTerm, rf.status, leader.LeaderID, leader.Term, len(leader.Entries), leader.Entries[0], leader.LeaderCommit)
 	//}
-	//Your code here (2A, 2B).
 	//LAB 2A
 	//Reply false if args.Term < rf.currentTerm (5.1)
 	term := rf.currentTerm
@@ -355,8 +357,25 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 	entry, ok := rf.log[leader.PrevLogIndex]
 	//fmt.Printf("Raft.RequestAppend: preLogIdx:%d, preLogTerm:%d, entryTerm:%d, cmd:%v\n", leader.PrevLogIndex, leader.PrevLogTerm, entry.Term, leader.Entries[0])
 	if !ok || entry.Term != leader.PrevLogTerm {
+
+		idx := leader.PrevLogIndex
 		logLen := len(rf.log)
-		for idx := leader.PrevLogIndex; idx < logLen; idx++ {
+
+		if ok {
+			//5.3 Optimized protocol
+			//one AppendEntries RPC will be required for each term with conflicting entries,
+			//rather than one RPC per entry.
+
+			//find the first index in confilict term and delete all the entries from this index
+			for confilictIdx := 0; confilictIdx < logLen; confilictIdx++ {
+				if rf.log[confilictIdx].Term == entry.Term {
+					idx = confilictIdx
+					break
+				}
+			}
+		}
+
+		for ; idx < logLen; idx++ {
 			delete(rf.log, idx)
 			//fmt.Printf("Raft.RequestAppend: Warning delete entries idx:%d, len:%d\n", idx, len(rf.log))
 		}
@@ -478,7 +497,7 @@ func sendEntries(rf *Raft) {
 			//the client) until all followers eventually store all log entries.
 			if taskState == false {
 				return
-				goto ReSent
+				//goto ReSent
 			}
 
 			if replys[idx].Term > currentTerm {
@@ -488,7 +507,16 @@ func sendEntries(rf *Raft) {
 
 			if !replys[idx].Success {
 				//fmt.Printf("sendEntires: Raft:%d Reply but not success, nextIndex:%d\n", idx, rf.nextIndex[idx])
-				rf.nextIndex[idx]--
+				//5.3 Optimized protocol the leader can decrement nextIndex
+				//to bypass all of the conflicting entries in that term
+
+				//Find the first confilict index in that term
+				for confilictIdx := 0; confilictIdx < logLen; confilictIdx++ {
+					if rf.log[confilictIdx].Term == prevTerm {
+						rf.nextIndex[idx] = confilictIdx
+						break
+					}
+				}
 				goto ReSent
 			}
 
@@ -533,9 +561,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.log[index] = entry
 	rf.matchIndex[rf.me] = index
 	rf.nextIndex[rf.me] = index + 1
-	//fmt.Printf("Raft.Start1 : len:%d, index:%d, term:%d \n", len, index, term)
-	//entries := []Entry{entry}
-
 	//LAB 2B - 3. Issue AppendEnties RPC in parallel to each of the other servers
 	//			  to replicate the entry
 
@@ -544,6 +569,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	//go sendEntries(rf)
 
 	//LAB 2B - 5. Return the results of that exection to the client
+	rf.persist()
 	return index, term, isLeader
 }
 
@@ -694,79 +720,6 @@ func resetTimer(t *time.Timer, d time.Duration) {
 	t.Reset(d)
 }
 
-//Do not retry if the RequestAppend RPC do not receive a response
-func beatOnce(rf *Raft) {
-	rf.Lock()
-	defer rf.Unlock()
-	if rf.status != Leader {
-		return
-	}
-
-	currentTerm := rf.currentTerm
-
-	//Prepare for all the replys
-	replys := make([]RequestAppendReply, len(rf.peers))
-
-	peers := rf.peers
-	for idx := 0; idx < len(rf.peers); idx++ {
-		if idx == rf.me {
-			continue
-		}
-		go func(idx int) {
-			DPrintf("HeartBeat   :%d -> %d -- Raft:%d(T:%2d)(S:%d)->Raft:%d\n",
-				rf.me, idx,
-				rf.me, rf.currentTerm, rf.status, idx)
-			//Rebeat:
-			prevIndex := rf.nextIndex[idx] - 1
-			prevTerm := rf.log[prevIndex].Term
-			entries := []Entry{}
-
-			for index := prevIndex + 1; index < len(rf.log); index++ {
-				entries = append(entries, rf.log[index])
-			}
-			//for index := prevIndex + 1; index < rf.commitIndex; index++ {
-			//	entries = append(entries, rf.log[index])
-			//}
-			//fmt.Printf("HeartBeat   :%d -> %d -- Raft:%d(T:%2d)(S:%d)->Raft:%d(commitIdx:%d)(prevIdx:%d)(matchIdx:%d)\n",
-			//	rf.me, idx,
-			//	rf.me, rf.currentTerm, rf.status, idx, rf.commitIndex, prevIndex, rf.matchIndex[idx])
-
-			args := &RequestAppendArgs{
-				Term:         currentTerm,
-				LeaderID:     rf.me,
-				Entries:      entries,
-				PrevLogIndex: prevIndex,
-				PrevLogTerm:  prevTerm,
-				LeaderCommit: rf.commitIndex,
-			}
-
-			taskState := peers[idx].Call("Raft.RequestAppend", args, &replys[idx])
-			//Servers retry RPCs if they do not receive a response
-			//in a timely manner(5.1 last line).
-			//This means retry after the rpc timeout interval ,
-			//so no need to implement your own timeouts around Call
-
-			//If a follower of or candidate creashed, the future RequestVote
-			//and AppendEntries PRC sent to it will fail. Raft handles these
-			//failurs by retrying indefinitely.(5.5)
-			if taskState == false {
-				//DPrintf("HeartBeatErr:%d > %d -- Raft:%d(T:%2d)(S:%d)->Raft:%d\n",
-				//	rf.me, idx,
-				//	rf.me, rf.currentTerm, rf.status, idx)
-				//goto Rebeat
-				return
-			}
-
-			if replys[idx].Term > currentTerm {
-				l2f(rf)
-			}
-
-			return
-
-		}(idx)
-	} //end for
-}
-
 func c2l(rf *Raft) {
 	rf.Lock()
 	defer rf.Unlock()
@@ -789,7 +742,6 @@ func c2l(rf *Raft) {
 			select {
 			case <-rf.heartbeatT.C:
 				resetTimer(rf.heartbeatT, heartbeatD)
-				//go func() { beatOnce(rf) }()
 				go sendEntries(rf)
 			}
 
@@ -879,6 +831,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	entry := Entry{Term: 0}
 	rf.log[0] = entry
 
+	// initialize from state persisted before a crash
+	rf.readPersist(persister.ReadRaftState())
+
 	// Your initialization code here (2A, 2B, 2C).
 	//LAB 2A
 	go func() {
@@ -897,9 +852,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			}
 		}
 	}()
-
-	// initialize from state persisted before a crash
-	rf.readPersist(persister.ReadRaftState())
 
 	return rf
 }
