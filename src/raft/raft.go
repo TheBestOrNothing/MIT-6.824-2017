@@ -88,15 +88,10 @@ type Raft struct {
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 	rf.Lock()
-	rf.Unlock()
+	defer rf.Unlock()
 
 	// Your code here (2A).
 	return rf.currentTerm, rf.status == Leader
-	if rf.status == Leader {
-		return rf.currentTerm, true
-	} else {
-		return rf.currentTerm, false
-	}
 
 }
 
@@ -396,6 +391,7 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 		f := math.Min(float64(leader.LeaderCommit), float64(len(rf.log)-1))
 		rf.commitIndex = int(f)
 		//fmt.Printf("Raft.RequestAppend: Follow:%d,Update commitIndex leaderCommit:%d, myCommit:%d\n", rf.me, leader.LeaderCommit, rf.commitIndex)
+		//fmt.Printf("Raft.RequestAppend:commitIdx of Raft:%d update to %d\n", rf.me, rf.commitIndex)
 	}
 	return
 }
@@ -412,7 +408,7 @@ func (rf *Raft) sendRequestAppend(server int, args *RequestAppendArgs, reply *Re
 //If there exists an N such that N > commitIndex, a majority
 //of matchIndex[i] ≥ N, and log[N].term == currentTerm:
 //set commitIndex = N (§5.3, §5.4).
-func updateCommitIndex(rf *Raft) {
+func updateCommitIndex1(rf *Raft) {
 	rf.Lock()
 	defer rf.Unlock()
 	cmtIdx := rf.commitIndex
@@ -431,6 +427,7 @@ func updateCommitIndex(rf *Raft) {
 		}
 
 		if cmtNum >= (len(rf.peers)/2 + 1) {
+			//&& rf.log[cmtIdx].Term == rf.currentTerm{
 			//fmt.Printf("updateCommitIndex: log[N].Term:%d , currentTerm:%d\n", rf.log[cmtIdx].Term, rf.currentTerm)
 			continue
 		} else {
@@ -441,6 +438,51 @@ func updateCommitIndex(rf *Raft) {
 	if rf.commitIndex < cmtIdx-1 {
 		rf.commitIndex = cmtIdx - 1
 		//fmt.Printf("updateCommitIndex: commitIdx:%d \n", rf.commitIndex)
+	}
+}
+
+func updateCommitIndex(rf *Raft) {
+	rf.Lock()
+	defer rf.Unlock()
+	logLen := len(rf.log)
+	term := rf.currentTerm
+	cmtNum := 0
+	cmtIdx := 0
+
+	for idx := 0; idx < logLen; idx++ {
+		if rf.log[idx].Term == term {
+			cmtIdx = idx
+			break
+		}
+	}
+
+	if cmtIdx == 0 {
+		return
+	}
+
+	for {
+		cmtNum = 0
+		DPrintf("updateCommitIndex:1 commitIdx:%d \n", cmtIdx)
+		for _, v := range rf.matchIndex {
+			if v >= cmtIdx {
+				cmtNum++
+			}
+		}
+
+		if cmtNum >= (len(rf.peers)/2 + 1) {
+			//fmt.Printf("updateCommitIndex: log[N].Term:%d , currentTerm:%d\n", rf.log[cmtIdx].Term, rf.currentTerm)
+			if rf.log[cmtIdx].Term != rf.currentTerm {
+				break
+			} else {
+				if cmtIdx > rf.commitIndex {
+					fmt.Printf("leader:%d updateCommitIndex: update to %d\n", rf.me, cmtIdx)
+					rf.commitIndex = cmtIdx
+				}
+			}
+		} else {
+			break
+		}
+		cmtIdx++
 	}
 }
 
@@ -497,7 +539,6 @@ func sendEntries(rf *Raft) {
 			//the client) until all followers eventually store all log entries.
 			if taskState == false {
 				return
-				//goto ReSent
 			}
 
 			if replys[idx].Term > currentTerm {
@@ -742,7 +783,9 @@ func c2l(rf *Raft) {
 			select {
 			case <-rf.heartbeatT.C:
 				resetTimer(rf.heartbeatT, heartbeatD)
-				go sendEntries(rf)
+				//gongzhe
+				//go sendEntries(rf)
+				sendEntries(rf)
 			}
 
 		}
