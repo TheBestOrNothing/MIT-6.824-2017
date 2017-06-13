@@ -587,6 +587,9 @@ func sendEntries(rf *Raft) {
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+	rf.Lock()
+	defer rf.Unlock()
+	defer rf.persist()
 	index := -1
 	term := -1
 	isLeader := true
@@ -611,7 +614,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	//go sendEntries(rf)
 
 	//LAB 2B - 5. Return the results of that exection to the client
-	rf.persist()
 	return index, term, isLeader
 }
 
