@@ -63,6 +63,7 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 	//LAB 2A
+	kill        bool
 	status      int           //The status of raft: leader, candidate, or follower
 	currentTerm int           //Latest term server has seen
 	votedFor    int           //CandidateID that receive vote in current term
@@ -462,7 +463,7 @@ func updateCommitIndex(rf *Raft) {
 
 	for {
 		cmtNum = 0
-		DPrintf("updateCommitIndex:1 commitIdx:%d \n", cmtIdx)
+		//DPrintf("updateCommitIndex:1 commitIdx:%d \n", cmtIdx)
 		for _, v := range rf.matchIndex {
 			if v >= cmtIdx {
 				cmtNum++
@@ -475,7 +476,7 @@ func updateCommitIndex(rf *Raft) {
 				break
 			} else {
 				if cmtIdx > rf.commitIndex {
-					fmt.Printf("leader:%d updateCommitIndex: update to %d\n", rf.me, cmtIdx)
+					DPrintf("leader:%d updateCommitIndex: update to %d\n", rf.me, cmtIdx)
 					rf.commitIndex = cmtIdx
 				}
 			}
@@ -622,12 +623,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 func (rf *Raft) Kill() {
 	// Your code here, if desired.
+	rf.kill = true
+	rf.status = Follower
 	stopTimer(rf.f2c)
-	if rf.heartbeatT != nil {
-		stopTimer(rf.heartbeatT)
-	}
-	drainChan(rf.c2l)
-	drainChan(rf.c2f)
 }
 
 //
@@ -636,9 +634,9 @@ func (rf *Raft) Kill() {
 // millisecond (5.2)
 //
 const (
-	TimeFrom   = 100
-	TimeTo     = 200
-	HeartBeats = 10
+	TimeFrom   = 150
+	TimeTo     = 300
+	HeartBeats = 87
 	Leader     = 0
 	Candidate  = 1
 	Follower   = 2
@@ -652,11 +650,11 @@ func timeOut() time.Duration {
 
 func electOnce(rf *Raft) {
 
-	rf.Lock()
-	defer rf.Unlock()
-	if rf.status != Candidate {
-		return
-	}
+	//rf.Lock()
+	//defer rf.Unlock()
+	//if rf.status != Candidate {
+	//	return
+	//}
 	//rf.currentTerm++
 	currentTerm := rf.currentTerm
 	votedNum := 1
@@ -682,6 +680,9 @@ func electOnce(rf *Raft) {
 			continue
 		}
 		go func(idx int) {
+			if rf.status != Candidate {
+				return
+			}
 			DPrintf("ElectOnce   :%d -> %d -- Raft:%d(T:%2d)(S:%d)->Raft:%d\n",
 				rf.me, idx,
 				rf.me, rf.currentTerm, rf.status, idx)
@@ -734,7 +735,7 @@ func f2c(rf *Raft) {
 	rf.currentTerm++
 	rf.votedFor = rf.me
 	resetTimer(rf.f2c, timeOut())
-	go electOnce(rf)
+	electOnce(rf)
 	//drain c2f channel because victory will set to false many times
 	//when a raftA is candidate and it get reject vote from raftB with bigger term
 	//at the same time a leader(raftC) have been selected and send heartbeat to raftA
@@ -780,6 +781,9 @@ func c2l(rf *Raft) {
 	rf.heartbeatT = time.NewTimer(time.Duration(0))
 	go func() {
 		for {
+			if rf.kill {
+				return
+			}
 			select {
 			case <-rf.heartbeatT.C:
 				resetTimer(rf.heartbeatT, heartbeatD)
@@ -851,6 +855,7 @@ func drainChan(c chan bool) {
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
+	rf.kill = false
 	rf.currentTerm = 0
 	rf.status = Follower
 	rf.peers = peers
@@ -882,9 +887,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go func() {
 		//Kick off leader election periodically
 		for {
+			if rf.kill {
+				return
+			}
 			select {
 			case <-rf.f2c.C:
-				go f2c(rf)
+				f2c(rf)
 			default:
 				if index := rf.lastApplied; index < rf.commitIndex {
 					//fmt.Printf("Applying: Raft:%d: lastApplied:%d, commitIdx:%d\n", rf.me, rf.lastApplied, rf.commitIndex)
