@@ -503,6 +503,7 @@ func sendEntries(rf *Raft) {
 	//Prepare for all the replys
 	replys := make([]RequestAppendReply, len(rf.peers))
 	peers := rf.peers
+	//mtx := &sync.Mutex{}
 
 	//DPrintf("sendEntires: 1 Leader.commitIndex%d\n", rf.commitIndex)
 	for idx := 0; idx < peersLen; idx++ {
@@ -516,9 +517,11 @@ func sendEntries(rf *Raft) {
 			prevTerm := rf.log[prevIndex].Term
 			entries := []Entry{}
 
+			//mtx.Lock()
 			for index := prevIndex + 1; index < logLen; index++ {
 				entries = append(entries, rf.log[index])
 			}
+			//mtx.Unlock()
 
 			retryArgs := &RequestAppendArgs{
 				Term:         currentTerm,
@@ -534,6 +537,7 @@ func sendEntries(rf *Raft) {
 				rf.me, rf.currentTerm, rf.status, idx)
 
 			taskState := peers[idx].Call("Raft.RequestAppend", retryArgs, &replys[idx])
+
 			//5.3 If followers crash or run slowly,
 			//or if network packets are lost, the leader retries Append-
 			//Entries RPCs indefinitely (even after it has responded to
@@ -682,13 +686,32 @@ func electOnce(rf *Raft) {
 			continue
 		}
 		go func(idx int) {
+			done := make(chan bool)
+			taskState := false
+
 			if rf.status != Candidate {
 				return
 			}
 			DPrintf("ElectOnce   :%d -> %d -- Raft:%d(T:%2d)(S:%d)->Raft:%d\n",
 				rf.me, idx,
 				rf.me, rf.currentTerm, rf.status, idx)
-			taskState := peers[idx].Call("Raft.RequestVote", args, &replys[idx])
+
+			go func() {
+				done <- peers[idx].Call("Raft.RequestVote", args, &replys[idx])
+			}()
+
+			for {
+				select {
+				case taskState = <-done:
+					//break
+					goto Next
+				case <-time.After(time.Duration(TimeFrom) * time.Millisecond):
+					DPrintf("Warning..... resetTimer.........%d\n", rf.me)
+					resetTimer(rf.f2c, timeOut())
+				}
+			}
+		Next:
+
 			//Servers retry RPCs if they do not receive a response
 			//in a timely manner(5.1 last line).
 			//This means retry after the rpc timeout interval ,
@@ -733,6 +756,9 @@ func f2c(rf *Raft) {
 	//To begin an election, a follower increments its current
 	//term and transitions to candidate state. It then votes for
 	//itself (5.2)
+	if rf.status == Leader {
+		return
+	}
 	rf.status = Candidate
 	rf.currentTerm++
 	rf.votedFor = rf.me
