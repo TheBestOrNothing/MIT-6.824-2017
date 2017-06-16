@@ -511,6 +511,8 @@ func sendEntries(rf *Raft) {
 			continue
 		}
 		go func(idx int) {
+			done := make(chan bool)
+			taskState := false
 
 		ReSent:
 			prevIndex := rf.nextIndex[idx] - 1
@@ -536,7 +538,21 @@ func sendEntries(rf *Raft) {
 				rf.me, idx,
 				rf.me, rf.currentTerm, rf.status, idx)
 
-			taskState := peers[idx].Call("Raft.RequestAppend", retryArgs, &replys[idx])
+			go func() {
+				done <- peers[idx].Call("Raft.RequestAppend", retryArgs, &replys[idx])
+			}()
+
+			for {
+				select {
+				case taskState = <-done:
+					//break
+					goto Next
+				case <-time.After(time.Duration(TimeFrom) * time.Millisecond):
+					DPrintf("Warning..... Append resetTimer.........%d\n", rf.me)
+					resetTimer(rf.f2c, timeOut())
+				}
+			}
+		Next:
 
 			//5.3 If followers crash or run slowly,
 			//or if network packets are lost, the leader retries Append-
@@ -706,7 +722,7 @@ func electOnce(rf *Raft) {
 					//break
 					goto Next
 				case <-time.After(time.Duration(TimeFrom) * time.Millisecond):
-					DPrintf("Warning..... resetTimer.........%d\n", rf.me)
+					DPrintf("Warning..... Vote resetTimer.........%d\n", rf.me)
 					resetTimer(rf.f2c, timeOut())
 				}
 			}
