@@ -206,9 +206,6 @@ func up2date(rf *Raft, candidate *RequestVoteArgs) bool {
 func (rf *Raft) RequestVote(candidate *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.Lock()
 	defer rf.Unlock()
-	DPrintf("RPC(Vote)   :%d <- %d -- Raft:%d(T:%2d)(S:%d)<-Raft:%d(T:%2d)\n",
-		rf.me, candidate.CandidateID,
-		rf.me, rf.currentTerm, rf.status, candidate.CandidateID, candidate.Term)
 	// Your code here (2A, 2B).
 	//LAB 2A
 	//Reply false if candidate.Term < rf.currentTerm (5.1)
@@ -218,6 +215,10 @@ func (rf *Raft) RequestVote(candidate *RequestVoteArgs, reply *RequestVoteReply)
 		reply.VoteGranted = false
 		return
 	}
+
+	DPrintf("RPC(Vote)   :%d <- %d -- Raft:%d(T:%2d)(S:%d)<-Raft:%d(T:%2d)\n",
+		rf.me, candidate.CandidateID,
+		rf.me, rf.currentTerm, rf.status, candidate.CandidateID, candidate.Term)
 
 	//LAB 2A
 	//If RPC request or response contains term T > currentTerm:
@@ -308,9 +309,6 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 	defer rf.Unlock()
 	defer rf.persist()
 
-	DPrintf("RPC(Append) :%d <- %d -- Raft:%d(T:%2d)(S:%d)<-Raft:%d(T:%2d)(Len:%d)\n",
-		rf.me, leader.LeaderID,
-		rf.me, rf.currentTerm, rf.status, leader.LeaderID, leader.Term, len(leader.Entries))
 	//if len(leader.Entries) > 0 {
 	//fmt.Printf("RPC(Append) :%d <- %d -- Raft:%d(T:%2d)(S:%d)<-Raft:%d(T:%2d)(Len:%d)(cmd:%v)(commitIndex:%d)\n",
 	//	rf.me, leader.LeaderID,
@@ -325,6 +323,9 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 		return
 	}
 
+	DPrintf("RPC(Append) :%d <- %d -- Raft:%d(T:%2d)(S:%d)<-Raft:%d(T:%2d)(Len:%d)\n",
+		rf.me, leader.LeaderID,
+		rf.me, rf.currentTerm, rf.status, leader.LeaderID, leader.Term, len(leader.Entries))
 	//LAB 2A
 	//If RPC request or response contains term T > currentTerm:
 	//set currentTerm = T, convert to follower (5.1)
@@ -394,6 +395,7 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 		//fmt.Printf("Raft.RequestAppend: Follow:%d,Update commitIndex leaderCommit:%d, myCommit:%d\n", rf.me, leader.LeaderCommit, rf.commitIndex)
 		//fmt.Printf("Raft.RequestAppend:commitIdx of Raft:%d update to %d\n", rf.me, rf.commitIndex)
 	}
+	resetTimer(rf.f2c, timeOut())
 	return
 }
 
@@ -511,8 +513,8 @@ func sendEntries(rf *Raft) {
 			continue
 		}
 		go func(idx int) {
-			done := make(chan bool)
-			taskState := false
+			//done := make(chan bool)
+			//taskState := false
 
 		ReSent:
 			prevIndex := rf.nextIndex[idx] - 1
@@ -520,9 +522,11 @@ func sendEntries(rf *Raft) {
 			entries := []Entry{}
 
 			//mtx.Lock()
+			rf.Lock()
 			for index := prevIndex + 1; index < logLen; index++ {
 				entries = append(entries, rf.log[index])
 			}
+			rf.Unlock()
 			//mtx.Unlock()
 
 			retryArgs := &RequestAppendArgs{
@@ -538,21 +542,22 @@ func sendEntries(rf *Raft) {
 				rf.me, idx,
 				rf.me, rf.currentTerm, rf.status, idx)
 
-			go func() {
-				done <- peers[idx].Call("Raft.RequestAppend", retryArgs, &replys[idx])
-			}()
+			taskState := peers[idx].Call("Raft.RequestAppend", retryArgs, &replys[idx])
+			//go func() {
+			//	done <- peers[idx].Call("Raft.RequestAppend", retryArgs, &replys[idx])
+			//}()
 
-			for {
-				select {
-				case taskState = <-done:
-					//break
-					goto Next
-				case <-time.After(time.Duration(TimeFrom) * time.Millisecond):
-					DPrintf("Warning..... Append resetTimer.........%d\n", rf.me)
-					resetTimer(rf.f2c, timeOut())
-				}
-			}
-		Next:
+			//for {
+			//	select {
+			//	case taskState = <-done:
+			//break
+			//		goto Next
+			//	case <-time.After(time.Duration(TimeFrom) * time.Millisecond):
+			//		DPrintf("Warning..... append resetTimer.........%d\n", rf.me)
+			//		resetTimer(rf.f2c, timeOut())
+			//	}
+			//}
+			//Next:
 
 			//5.3 If followers crash or run slowly,
 			//or if network packets are lost, the leader retries Append-
@@ -722,7 +727,7 @@ func electOnce(rf *Raft) {
 					//break
 					goto Next
 				case <-time.After(time.Duration(TimeFrom) * time.Millisecond):
-					DPrintf("Warning..... Vote resetTimer.........%d\n", rf.me)
+					DPrintf("Warning..... vote resetTimer.........%d\n", rf.me)
 					resetTimer(rf.f2c, timeOut())
 				}
 			}
