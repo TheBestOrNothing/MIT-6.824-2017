@@ -309,11 +309,6 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 	defer rf.Unlock()
 	defer rf.persist()
 
-	//if len(leader.Entries) > 0 {
-	//fmt.Printf("RPC(Append) :%d <- %d -- Raft:%d(T:%2d)(S:%d)<-Raft:%d(T:%2d)(Len:%d)(cmd:%v)(commitIndex:%d)\n",
-	//	rf.me, leader.LeaderID,
-	//	rf.me, rf.currentTerm, rf.status, leader.LeaderID, leader.Term, len(leader.Entries), leader.Entries[0], leader.LeaderCommit)
-	//}
 	//LAB 2A
 	//Reply false if args.Term < rf.currentTerm (5.1)
 	term := rf.currentTerm
@@ -352,31 +347,31 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 	reply.Term = term
 	reply.Success = true
 	entry, ok := rf.log[leader.PrevLogIndex]
-	//fmt.Printf("Raft.RequestAppend: preLogIdx:%d, preLogTerm:%d, entryTerm:%d, cmd:%v\n", leader.PrevLogIndex, leader.PrevLogTerm, entry.Term, leader.Entries[0])
-	if !ok || entry.Term != leader.PrevLogTerm {
+
+	if !ok {
+		DPrintf("RPC(Append) :%d <- %d -- Raft:%d(T:%2d)(S:%d)<-Raft:%d(T:%2d)(Len:%d) false1\n",
+			rf.me, leader.LeaderID,
+			rf.me, rf.currentTerm, rf.status, leader.LeaderID, leader.Term, len(leader.Entries))
+		reply.Success = false
+		return
+	}
+
+	if entry.Term != leader.PrevLogTerm {
 
 		idx := leader.PrevLogIndex
 		logLen := len(rf.log)
 
-		if ok {
-			//5.3 Optimized protocol
-			//one AppendEntries RPC will be required for each term with conflicting entries,
-			//rather than one RPC per entry.
-
-			//find the first index in confilict term and delete all the entries from this index
-			for confilictIdx := 0; confilictIdx < logLen; confilictIdx++ {
-				if rf.log[confilictIdx].Term == entry.Term {
-					idx = confilictIdx
-					break
-				}
-			}
-		}
+		//5.3 Optimized protocol
+		//one AppendEntries RPC will be required for each term with conflicting entries,
+		//rather than one RPC per entry.
 
 		for ; idx < logLen; idx++ {
 			delete(rf.log, idx)
-			//fmt.Printf("Raft.RequestAppend: Warning delete entries idx:%d, len:%d\n", idx, len(rf.log))
 		}
 		reply.Success = false
+		DPrintf("RPC(Append) :%d <- %d -- Raft:%d(T:%2d)(S:%d)<-Raft:%d(T:%2d)(Len:%d) false2\n",
+			rf.me, leader.LeaderID,
+			rf.me, rf.currentTerm, rf.status, leader.LeaderID, leader.Term, len(leader.Entries))
 		return
 	}
 
@@ -388,65 +383,23 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 			rf.log[leader.PrevLogIndex+idx+1] = e
 		}
 	}
-	//printLogs(rf)
+
 	if leader.LeaderCommit > rf.commitIndex {
 		f := math.Min(float64(leader.LeaderCommit), float64(len(rf.log)-1))
 		rf.commitIndex = int(f)
-		//fmt.Printf("Raft.RequestAppend: Follow:%d,Update commitIndex leaderCommit:%d, myCommit:%d\n", rf.me, leader.LeaderCommit, rf.commitIndex)
-		//fmt.Printf("Raft.RequestAppend:commitIdx of Raft:%d update to %d\n", rf.me, rf.commitIndex)
+		DPrintf("Raft.RequestAppend:commitIdx of Raft:%d update to %d\n", rf.me, rf.commitIndex)
 	}
 	resetTimer(rf.f2c, timeOut())
 	return
-}
-
-//
-// example code to send a RequestAppend RPC to a server.
-//
-func (rf *Raft) sendRequestAppend(server int, args *RequestAppendArgs, reply *RequestAppendReply) bool {
-	ok := rf.peers[server].Call("Raft.RequestAppend", args, reply)
-	return ok
 }
 
 //update the committed index for leader
 //If there exists an N such that N > commitIndex, a majority
 //of matchIndex[i] ≥ N, and log[N].term == currentTerm:
 //set commitIndex = N (§5.3, §5.4).
-func updateCommitIndex1(rf *Raft) {
-	rf.Lock()
-	defer rf.Unlock()
-	cmtIdx := rf.commitIndex
-	cmtNum := 0
-	//for k1, v1 := range rf.matchIndex {
-	//	DPrintf("updateCommitIndex: matchIndex -- k:%d -> v:%d\n", k1, v1)
-	//}
-	for {
-		cmtIdx++
-		cmtNum = 0
-		DPrintf("updateCommitIndex:1 commitIdx:%d \n", cmtIdx)
-		for _, v := range rf.matchIndex {
-			if v >= cmtIdx {
-				cmtNum++
-			}
-		}
-
-		if cmtNum >= (len(rf.peers)/2 + 1) {
-			//&& rf.log[cmtIdx].Term == rf.currentTerm{
-			//fmt.Printf("updateCommitIndex: log[N].Term:%d , currentTerm:%d\n", rf.log[cmtIdx].Term, rf.currentTerm)
-			continue
-		} else {
-			break
-		}
-	}
-
-	if rf.commitIndex < cmtIdx-1 {
-		rf.commitIndex = cmtIdx - 1
-		//fmt.Printf("updateCommitIndex: commitIdx:%d \n", rf.commitIndex)
-	}
-}
-
 func updateCommitIndex(rf *Raft) {
-	rf.Lock()
-	defer rf.Unlock()
+	//rf.Lock()
+	//defer rf.Unlock()
 	logLen := len(rf.log)
 	term := rf.currentTerm
 	cmtNum := 0
@@ -465,7 +418,6 @@ func updateCommitIndex(rf *Raft) {
 
 	for {
 		cmtNum = 0
-		//DPrintf("updateCommitIndex:1 commitIdx:%d \n", cmtIdx)
 		for _, v := range rf.matchIndex {
 			if v >= cmtIdx {
 				cmtNum++
@@ -473,7 +425,6 @@ func updateCommitIndex(rf *Raft) {
 		}
 
 		if cmtNum >= (len(rf.peers)/2 + 1) {
-			//fmt.Printf("updateCommitIndex: log[N].Term:%d , currentTerm:%d\n", rf.log[cmtIdx].Term, rf.currentTerm)
 			if rf.log[cmtIdx].Term != rf.currentTerm {
 				break
 			} else {
@@ -513,21 +464,21 @@ func sendEntries(rf *Raft) {
 			continue
 		}
 		go func(idx int) {
-			//done := make(chan bool)
-			//taskState := false
 
 		ReSent:
+			if rf.status != Leader {
+				return
+			}
+
+			rf.Lock()
 			prevIndex := rf.nextIndex[idx] - 1
 			prevTerm := rf.log[prevIndex].Term
 			entries := []Entry{}
 
-			//mtx.Lock()
-			rf.Lock()
 			for index := prevIndex + 1; index < logLen; index++ {
 				entries = append(entries, rf.log[index])
 			}
 			rf.Unlock()
-			//mtx.Unlock()
 
 			retryArgs := &RequestAppendArgs{
 				Term:         currentTerm,
@@ -543,21 +494,6 @@ func sendEntries(rf *Raft) {
 				rf.me, rf.currentTerm, rf.status, idx)
 
 			taskState := peers[idx].Call("Raft.RequestAppend", retryArgs, &replys[idx])
-			//go func() {
-			//	done <- peers[idx].Call("Raft.RequestAppend", retryArgs, &replys[idx])
-			//}()
-
-			//for {
-			//	select {
-			//	case taskState = <-done:
-			//break
-			//		goto Next
-			//	case <-time.After(time.Duration(TimeFrom) * time.Millisecond):
-			//		DPrintf("Warning..... append resetTimer.........%d\n", rf.me)
-			//		resetTimer(rf.f2c, timeOut())
-			//	}
-			//}
-			//Next:
 
 			//5.3 If followers crash or run slowly,
 			//or if network packets are lost, the leader retries Append-
@@ -567,30 +503,46 @@ func sendEntries(rf *Raft) {
 				return
 			}
 
+			if currentTerm != rf.currentTerm {
+				return
+			}
+
 			if replys[idx].Term > currentTerm {
 				l2f(rf)
 				return
 			}
 
 			if !replys[idx].Success {
-				//fmt.Printf("sendEntires: Raft:%d Reply but not success, nextIndex:%d\n", idx, rf.nextIndex[idx])
 				//5.3 Optimized protocol the leader can decrement nextIndex
 				//to bypass all of the conflicting entries in that term
 
 				//Find the first confilict index in that term
-				for confilictIdx := 0; confilictIdx < logLen; confilictIdx++ {
+				rf.Lock()
+				confilictIdx := 0
+				for ; confilictIdx < logLen; confilictIdx++ {
 					if rf.log[confilictIdx].Term == prevTerm {
-						rf.nextIndex[idx] = confilictIdx
 						break
 					}
 				}
-				goto ReSent
+				DPrintf("sendEntires: Raft:%d ReplyFrom %d not success, nextIndex:%d , confilictIdx:%d\n",
+					rf.me, idx, rf.nextIndex[idx], confilictIdx)
+
+				if confilictIdx < rf.nextIndex[idx] {
+					rf.nextIndex[idx] = confilictIdx
+					rf.Unlock()
+					goto ReSent
+				}
+				rf.Unlock()
+				return
+
 			}
 
 			if replys[idx].Success {
-				rf.matchIndex[idx] = logLen - 1
-				rf.nextIndex[idx] = logLen
+				rf.Lock()
+				rf.matchIndex[idx] = prevIndex + len(entries)
+				rf.nextIndex[idx] = rf.matchIndex[idx] + 1
 				updateCommitIndex(rf)
+				rf.Unlock()
 				return
 			}
 
@@ -663,7 +615,7 @@ func (rf *Raft) Kill() {
 const (
 	TimeFrom   = 150
 	TimeTo     = 300
-	HeartBeats = 87
+	HeartBeats = 50
 	Leader     = 0
 	Candidate  = 1
 	Follower   = 2
@@ -677,12 +629,6 @@ func timeOut() time.Duration {
 
 func electOnce(rf *Raft) {
 
-	//rf.Lock()
-	//defer rf.Unlock()
-	//if rf.status != Candidate {
-	//	return
-	//}
-	//rf.currentTerm++
 	currentTerm := rf.currentTerm
 	votedNum := 1
 	mtx := &sync.Mutex{}
@@ -707,8 +653,6 @@ func electOnce(rf *Raft) {
 			continue
 		}
 		go func(idx int) {
-			done := make(chan bool)
-			taskState := false
 
 			if rf.status != Candidate {
 				return
@@ -717,21 +661,7 @@ func electOnce(rf *Raft) {
 				rf.me, idx,
 				rf.me, rf.currentTerm, rf.status, idx)
 
-			go func() {
-				done <- peers[idx].Call("Raft.RequestVote", args, &replys[idx])
-			}()
-
-			for {
-				select {
-				case taskState = <-done:
-					//break
-					goto Next
-				case <-time.After(time.Duration(TimeFrom) * time.Millisecond):
-					DPrintf("Warning..... vote resetTimer.........%d\n", rf.me)
-					resetTimer(rf.f2c, timeOut())
-				}
-			}
-		Next:
+			taskState := peers[idx].Call("Raft.RequestVote", args, &replys[idx])
 
 			//Servers retry RPCs if they do not receive a response
 			//in a timely manner(5.1 last line).
@@ -743,6 +673,13 @@ func electOnce(rf *Raft) {
 			//failurs by retrying indefinitely.(5.5)
 			if taskState == false {
 				//fmt.Printf("Raft.Election:RPC error - %v send to %v\n", me, idx)
+				return
+			}
+
+			//If RequestVote take long time to reply,
+			//and the current term of Raft changed(differnt form when sending out).
+			//then return directly.
+			if currentTerm != rf.currentTerm {
 				return
 			}
 
@@ -788,8 +725,6 @@ func f2c(rf *Raft) {
 	//drain c2f channel because victory will set to false many times
 	//when a raftA is candidate and it get reject vote from raftB with bigger term
 	//at the same time a leader(raftC) have been selected and send heartbeat to raftA
-	//drainChan(rf.c2l)
-	//drainChan(rf.c2f)
 }
 
 //
@@ -799,8 +734,6 @@ func stopTimer(t *time.Timer) {
 	if !t.Stop() {
 		select {
 		case <-t.C:
-			//fmt.Println("resetTimer: What happend??")
-			//fmt.Println("resetTimer: This means timeout happend but no electioin trigged!")
 		default:
 		}
 	}
@@ -824,7 +757,6 @@ func c2l(rf *Raft) {
 	stopTimer(rf.f2c)
 	//candidate to leader
 	rf.status = Leader
-	//rf.votedFor = -1
 	//Send the heart beat to all the others
 	heartbeatD := time.Duration(HeartBeats) * time.Millisecond
 	rf.heartbeatT = time.NewTimer(time.Duration(0))
@@ -843,7 +775,6 @@ func c2l(rf *Raft) {
 
 		}
 	}()
-	//fmt.Println("C2L          ............. ", rf.me)
 	for k, _ := range rf.nextIndex {
 		rf.nextIndex[k] = len(rf.log)
 	}
@@ -856,10 +787,8 @@ func c2f(rf *Raft) {
 	}
 	DPrintf("C2F........  %d(T:%2d)(S:%d)\n", rf.me, rf.currentTerm, rf.status)
 	rf.status = Follower
-	//rf.currentTerm = rf.currentTerm - 1
 	rf.votedFor = -1
 	resetTimer(rf.f2c, timeOut())
-	//fmt.Println("C2F          ............. ", rf.me)
 }
 
 func l2f(rf *Raft) {
@@ -868,14 +797,12 @@ func l2f(rf *Raft) {
 		return
 	}
 	DPrintf("L2F........  %d(T:%2d)(S:%d)\n", rf.me, rf.currentTerm, rf.status)
-	//fmt.Printf("L2F........  %d(T:%2d)(S:%d)\n", rf.me, rf.currentTerm, rf.status)
 	rf.status = Follower
 	rf.votedFor = -1
 	//stop the heartbeat
 	stopTimer(rf.heartbeatT)
 	//reset timeout timer
 	resetTimer(rf.f2c, timeOut())
-	//fmt.Println("L2F          ............. ", rf.me)
 }
 
 func drainChan(c chan bool) {
@@ -947,7 +874,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 					//fmt.Printf("Applying: Raft:%d: lastApplied:%d, commitIdx:%d\n", rf.me, rf.lastApplied, rf.commitIndex)
 					applyCh <- ApplyMsg{Index: index + 1, Command: rf.log[index+1].Command}
 					rf.lastApplied++
-					//printLogs(rf)
 				}
 			}
 		}
@@ -956,9 +882,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	return rf
 }
 
-func printLogs(rf *Raft) {
-	for key, e := range rf.log {
-		fmt.Printf("PrintLogs: Raft:%d, %d -> %v\n",
-			rf.me, key, e)
+func (rf *Raft) PrintLogs() {
+	fmt.Printf("PrintLogs: Raft:%d ", rf.me)
+	for idx := 1; idx < len(rf.log); idx++ {
+		cmd := rf.log[idx].Command.(int)
+		term := rf.log[idx].Term
+		fmt.Printf("{%3d,%4d} ", term, cmd%10000)
 	}
+	fmt.Printf("\n")
 }
