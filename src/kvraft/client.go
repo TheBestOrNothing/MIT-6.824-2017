@@ -3,7 +3,8 @@ package raftkv
 import "labrpc"
 import "crypto/rand"
 import "math/big"
-
+import "time"
+import "fmt"
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
@@ -39,7 +40,25 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
-	return ""
+	args := &GetArgs{
+		Key: key,
+	}
+	value := ""
+	t0 := time.Now()
+	for time.Since(t0).Seconds() < 10 {
+		replys := make([]GetReply, len(ck.servers))
+		for si := 0; si < len(ck.servers); si++ {
+			ok := ck.servers[si].Call("RaftKV.Get", args, &replys[si])
+			if ok && replys[si].WrongLeader {
+				continue
+			}
+			if replys[si].Err == OK {
+				return replys[si].Value
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return value
 }
 
 //
@@ -54,6 +73,30 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+	args := &PutAppendArgs{
+		Key:   key,
+		Value: value,
+		Op:    op,
+	}
+
+	t0 := time.Now()
+	for time.Since(t0).Seconds() < 10 {
+		replys := make([]PutAppendReply, len(ck.servers))
+		for si := 0; si < len(ck.servers); si++ {
+			ok := ck.servers[si].Call("RaftKV.PutAppend", args, &replys[si])
+			//fmt.Printf("kvRaft:%d, ok:%v {%v, %v} \n",
+			//	replys[si].Me, ok, replys[si].WrongLeader, replys[si].Err)
+			if ok && replys[si].WrongLeader {
+				continue
+			}
+
+			if replys[si].Err == OK {
+				fmt.Printf("OP{%v, %v, %v} PutAppend success\n", op, key, value)
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {
