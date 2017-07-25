@@ -4,18 +4,17 @@ import (
 	"encoding/gob"
 	"fmt"
 	"labrpc"
-	"log"
 	"raft"
 	"sort"
 	"sync"
 	"time"
 )
 
-const Debug = 0
+const Debug = 1
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
-		log.Printf(format, a...)
+		fmt.Printf(format, a...)
 	}
 	return
 }
@@ -46,6 +45,13 @@ type RaftKV struct {
 	data map[string]map[int]Entry
 }
 
+func (kv *RaftKV) CheckLeader(args *GetLeaderArgs, reply *GetLeaderReply) {
+	term, isLeader := kv.rf.GetState()
+	reply.WrongLeader = !isLeader
+	reply.Term = term
+	reply.Me = kv.me
+}
+
 func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
 	reply.Value = ""
@@ -57,8 +63,8 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	}
 	putReply := &PutAppendReply{}
 	kv.PutAppend(putArgs, putReply)
-	fmt.Printf("Get :%d - WrongLeader:%v,Err:%v  \n",
-		kv.me, putReply.WrongLeader, putReply.Err)
+	//fmt.Printf("Get :%d - WrongLeader:%v,Err:%v  \n",
+	//	kv.me, putReply.WrongLeader, putReply.Err)
 	reply.WrongLeader = putReply.WrongLeader
 	reply.Err = putReply.Err
 	if reply.Err != OK {
@@ -81,8 +87,10 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	}
 	kv.RUnlock()
 	reply.Value = values
-	fmt.Printf("Get From leader:%d - Op{Key:%v, Value:%v} \n",
-		kv.me, args.Key, values)
+	//fmt.Printf("Get From leader:%d - Op{Key:%v, Value:%v} \n",
+	//	kv.me, args.Key, values)
+	DPrintf("Server GET OP{%v, %v, %v} success\n", "Get", args.Key, values)
+
 }
 
 func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
@@ -97,6 +105,9 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	if !isLeader {
 		return
 	}
+
+	//fmt.Printf("Server:%d Put Start: - Op{Op:%v, Key:%v, Value:%v} index:%d Err:%v\n",
+	//	kv.me, cmd.Op, cmd.Key, cmd.Value, index, reply.Err)
 
 	t0 := time.Now()
 	for time.Since(t0).Seconds() < 5 {
@@ -115,8 +126,10 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		//kv.printData()
 		kv.RUnlock()
 		reply.Err = OK
-		fmt.Printf("Leader:%d - Op{Op:%v, Key:%v, Value:%v} index:%d Err:%v\n",
-			kv.me, cmd.Op, cmd.Key, cmd.Value, index, reply.Err)
+		//fmt.Printf("Leader:%d - Op{Op:%v, Key:%v, Value:%v} index:%d Err:%v\n",
+		//	kv.me, cmd.Op, cmd.Key, cmd.Value, index, reply.Err)
+		DPrintf("Server PUT OP{%v, %v, %v} success {WrongL:%v, Err:%v, Me:%v,Index:%v}\n",
+			args.Op, args.Key, args.Value, reply.WrongLeader, reply.Err, reply.Me, index)
 		if v.Value != cmd.Value {
 			fmt.Printf("Warning the value is not matched after put\n")
 		}
@@ -189,8 +202,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 			} else {
 				fmt.Printf("The OP can not dry from msg\n")
 			}
-			kv.printData(kv.me)
 			kv.Unlock()
+			kv.printData(kv.me)
 		}
 	}()
 
@@ -202,6 +215,7 @@ func (kv *RaftKV) printData(me int) {
 		return
 	}
 	fmt.Printf("%d Printing data ...\n", me)
+	kv.RLock()
 	for key, entry := range kv.data {
 		fmt.Printf("Key:%v \n", key)
 
@@ -215,4 +229,5 @@ func (kv *RaftKV) printData(me int) {
 		}
 		fmt.Printf("\n")
 	}
+	kv.RUnlock()
 }

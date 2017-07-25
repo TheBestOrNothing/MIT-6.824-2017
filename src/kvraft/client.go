@@ -4,11 +4,14 @@ import "labrpc"
 import "crypto/rand"
 import "math/big"
 import "time"
-import "fmt"
+
+//import "fmt"
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
+	term   int
+	leader int
 }
 
 func nrand() int64 {
@@ -22,7 +25,57 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// You'll have to add code here.
+	ck.leader = 0
+	ck.term = 0
 	return ck
+}
+
+func (ck *Clerk) CheckOneLeader() {
+	args := &GetLeaderArgs{}
+	replys := make([]GetLeaderReply, len(ck.servers))
+	//leaders := make([]int, len(ck.servers))
+	leaders := make(map[int][]int)
+	for si := 0; si < len(ck.servers); si++ {
+		ok := ck.servers[si].Call("RaftKV.CheckLeader", args, &replys[si])
+		if !ok {
+			replys[si].Err = ErrNoKey
+			continue
+		}
+
+		if !replys[si].WrongLeader {
+			t := replys[si].Term
+			leaders[t] = append(leaders[t], si)
+		}
+	}
+	lastTermWithLeader := -1
+	for t, ls := range leaders {
+		if len(ls) > 1 {
+			DPrintf("Waring: There are two leader in term %d\n", t)
+			ck.leader = -1
+			return
+		}
+
+		if t > lastTermWithLeader {
+			lastTermWithLeader = t
+			ck.term = t
+		}
+	}
+
+	if len(leaders) != 0 {
+		ck.leader = leaders[lastTermWithLeader][0]
+		return
+	}
+
+	ck.leader = -1
+	return
+}
+
+func (ck *Clerk) TheOne() {
+	ck.CheckOneLeader()
+	for ck.leader == -1 {
+		time.Sleep(10 * time.Millisecond)
+		ck.CheckOneLeader()
+	}
 }
 
 //
@@ -38,27 +91,27 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) Get(key string) string {
-
-	// You will have to modify this function.
 	args := &GetArgs{
 		Key: key,
 	}
-	value := ""
-	t0 := time.Now()
-	for time.Since(t0).Seconds() < 10 {
-		replys := make([]GetReply, len(ck.servers))
-		for si := 0; si < len(ck.servers); si++ {
-			ok := ck.servers[si].Call("RaftKV.Get", args, &replys[si])
-			if ok && replys[si].WrongLeader {
-				continue
-			}
-			if replys[si].Err == OK {
-				return replys[si].Value
-			}
-		}
+
+ReGet:
+	reply := &GetReply{}
+	ok := ck.servers[ck.leader].Call("RaftKV.Get", args, reply)
+
+	if !ok {
 		time.Sleep(10 * time.Millisecond)
+		goto ReGet
 	}
-	return value
+	if reply.WrongLeader {
+		ck.TheOne()
+		goto ReGet
+	}
+	if reply.Err != OK {
+		goto ReGet
+	}
+	DPrintf("Client GET OP{%v, %v, %v} success\n", "Get", key, reply.Value)
+	return reply.Value
 }
 
 //
@@ -72,31 +125,33 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	// You will have to modify this function.
 	args := &PutAppendArgs{
 		Key:   key,
 		Value: value,
 		Op:    op,
 	}
 
-	t0 := time.Now()
-	for time.Since(t0).Seconds() < 10 {
-		replys := make([]PutAppendReply, len(ck.servers))
-		for si := 0; si < len(ck.servers); si++ {
-			ok := ck.servers[si].Call("RaftKV.PutAppend", args, &replys[si])
-			//fmt.Printf("kvRaft:%d, ok:%v {%v, %v} \n",
-			//	replys[si].Me, ok, replys[si].WrongLeader, replys[si].Err)
-			if ok && replys[si].WrongLeader {
-				continue
-			}
-
-			if replys[si].Err == OK {
-				fmt.Printf("OP{%v, %v, %v} PutAppend success\n", op, key, value)
-				return
-			}
-		}
+RePutAppend:
+	reply := &PutAppendReply{}
+	//DPrintf("Client Put From Server1 {%v, %v, %v} -- {WrongL:%v, Err:%v, Me:%v}\n",
+	//	args.Op, args.Key, args.Value, reply.WrongLeader, reply.Err, reply.Me)
+	ok := ck.servers[ck.leader].Call("RaftKV.PutAppend", args, reply)
+	//DPrintf("Client Put From Server2 {%v, %v, %v} -- {WrongL:%v, Err:%v, Me:%v}\n",
+	//	args.Op, args.Key, args.Value, reply.WrongLeader, reply.Err, reply.Me)
+	if !ok {
+		DPrintf("Client PUT Server Losting ? ? ?\n")
 		time.Sleep(10 * time.Millisecond)
+		goto RePutAppend
 	}
+	if reply.WrongLeader {
+		DPrintf("Client PUT Finding A New Leader\n")
+		ck.TheOne()
+		goto RePutAppend
+	}
+	if reply.Err != OK {
+		goto RePutAppend
+	}
+	DPrintf("Client PUT OP{%v, %v, %v} success\n", op, key, value)
 }
 
 func (ck *Clerk) Put(key string, value string) {
