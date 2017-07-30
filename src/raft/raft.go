@@ -185,6 +185,8 @@ func up2date(rf *Raft, candidate *RequestVoteArgs) bool {
 
 	lastEntry := rf.log[len(rf.log)-1]
 
+	DPrintf("Raft:%d {Term:%d, logLen:%d} V Candidate:%d { LastLogTerm:%d, LastLogIndex:%d}\n",
+		rf.me, lastEntry.Term, len(rf.log), candidate.CandidateID, candidate.LastLogTerm, candidate.LastLogIndex)
 	//If the logs have last entries with different terms,
 	//then the log with the later term is more up2date(5.4.1)
 	if candidate.LastLogTerm > lastEntry.Term {
@@ -591,6 +593,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	//go sendEntries(rf)
 
 	//LAB 2B - 5. Return the results of that exection to the client
+	fmt.Printf("Raft Leader:%d, index:%d, term:%d\n", rf.me, index, term)
 	return index, term, isLeader
 }
 
@@ -710,6 +713,7 @@ func f2c(rf *Raft) {
 	rf.Lock()
 	defer rf.Unlock()
 	DPrintf("F2C........  %d(T:%2d)(S:%d)\n", rf.me, rf.currentTerm, rf.status)
+
 	//Stop the timer firstly
 	//To begin an election, a follower increments its current
 	//term and transitions to candidate state. It then votes for
@@ -872,8 +876,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			default:
 				if index := rf.lastApplied; index < rf.commitIndex {
 					//fmt.Printf("Applying: Raft:%d: lastApplied:%d, commitIdx:%d\n", rf.me, rf.lastApplied, rf.commitIndex)
+					rf.Lock()
 					applyCh <- ApplyMsg{Index: index + 1, Command: rf.log[index+1].Command}
 					rf.lastApplied++
+					rf.Unlock()
 				}
 			}
 		}
@@ -882,12 +888,22 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	return rf
 }
 
-func (rf *Raft) PrintLogs() {
+func (rf *Raft) PrintLogsInt() {
 	fmt.Printf("PrintLogs: Raft:%d ", rf.me)
 	for idx := 1; idx < len(rf.log); idx++ {
 		cmd := rf.log[idx].Command.(int)
 		term := rf.log[idx].Term
 		fmt.Printf("{%3d,%4d} ", term, cmd%10000)
+	}
+	fmt.Printf("\n")
+}
+
+func (rf *Raft) PrintLogsOp() {
+	fmt.Printf("PrintLogs: Raft:%d ", rf.me)
+	for idx := 1; idx < len(rf.log); idx++ {
+		cmd := rf.log[idx].Command.(int)
+		term := rf.log[idx].Term
+		fmt.Printf("%2d:{%2d,%v} ", idx, term, cmd)
 	}
 	fmt.Printf("\n")
 }

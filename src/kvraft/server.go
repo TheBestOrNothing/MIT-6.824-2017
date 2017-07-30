@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const Debug = 1
+const Debug = 0
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
@@ -66,10 +66,10 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
 	//fmt.Printf("Get :%d - WrongLeader:%v,Err:%v  \n",
 	//	kv.me, putReply.WrongLeader, putReply.Err)
-	defer func() {
-		reply.Committed = kv.committed[args.Client]
-		reply.CheckCode = kv.checkCode[args.Client]
-	}()
+	//defer func() {
+	//	reply.Committed = kv.committed[args.Client]
+	//	reply.CheckCode = kv.checkCode[args.Client]
+	//}()
 
 	reply.WrongLeader = false
 	reply.Err = ErrNoKey
@@ -81,16 +81,12 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	value, ok1 := kv.data[args.Key]
 	if !ok1 {
 		kv.RUnlock()
+		DPrintf("Server GET No Key:%v exist\n", args.Key)
 		return
 	}
 
 	//CliCmt := uint64(args.Client)<<32 + uint64(args.Committed)
 	//fmt.Printf("CliCmt in Get: CliCmt:%v, Client:%v, Committed:%v\n", CliCmt, args.Client, args.Committed)
-	//_, ok2 := value[CliCmt]
-	//if !ok2 {
-	//	kv.RUnlock()
-	//	return
-	//}
 
 	var keys U64Array
 	for key := range value {
@@ -114,8 +110,10 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 
 func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	defer func() {
+		kv.RLock()
 		reply.Committed = kv.committed[args.Client]
 		reply.CheckCode = kv.checkCode[args.Client]
+		kv.RUnlock()
 	}()
 
 	cmd := Op{
@@ -202,6 +200,7 @@ func (kv *RaftKV) Kill() {
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *RaftKV {
 	// call gob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
+	//fmt.Printf("StartKVServer :%d\n", me)
 	gob.Register(Op{})
 
 	kv := new(RaftKV)
@@ -277,9 +276,9 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 }
 
 func (kv *RaftKV) printData(me int) {
-	if _, leader := kv.rf.GetState(); !leader {
-		return
-	}
+	//if _, leader := kv.rf.GetState(); !leader {
+	//	return
+	//}
 	fmt.Printf("%d Printing data ...\n", me)
 	kv.RLock()
 	for key, values := range kv.data {

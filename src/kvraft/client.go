@@ -25,12 +25,12 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck.latestNum = 0
 	ck.committed = 0
 	ck.cltId = rand.Uint32()
-	DPrintf("MakeClerk %v\n", ck.cltId)
+	//DPrintf("MakeClerk %v\n", ck.cltId)
 	return ck
 }
 
 func (ck *Clerk) CheckOneLeader() {
-	//DPrintf("Are you in  CheckOneLeader\n")
+	DPrintf("Checking .. .. OneLeader\n")
 	args := &GetLeaderArgs{}
 	replys := make([]GetLeaderReply, len(ck.servers))
 	//leaders := make([]int, len(ck.servers))
@@ -127,7 +127,7 @@ func (ck *Clerk) isCommitted(SeqNum uint32, CheckCode uint32, Key string) bool {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) Get(key string) string {
-	//DPrintf("Client Get input0 latestNum:%d \n", ck.latestNum)
+	DPrintf("Client Get Startting .. key:%v\n", key)
 
 	ck.isCommitted(rand.Uint32(), rand.Uint32(), key)
 	args := &GetArgs{
@@ -135,15 +135,10 @@ func (ck *Clerk) Get(key string) string {
 		Client: ck.cltId,
 	}
 
-	//DPrintf("Client Get input1 args:%v \n", args)
-ReGet:
 	reply := &GetReply{}
 	//DPrintf("Client Get input args:%v, reply:%v\n", args, reply)
 	ok := ck.servers[ck.leader].Call("RaftKV.Get", args, reply)
 	//DPrintf("Client Get form server %v\n", reply)
-	if !ok {
-		goto ReGet
-	}
 
 	if ok && reply.Err == OK {
 		DPrintf("Client GET OP{%v, %v, %v} success {Committed:%d}\n",
@@ -151,7 +146,8 @@ ReGet:
 		return reply.Value
 	}
 
-	return ""
+	DPrintf("Client Get What Happened %v\n", reply)
+	return ck.Get(key)
 }
 
 //
@@ -184,22 +180,25 @@ RePutAppend:
 	//DPrintf("Client Put From Server2 {%v, %v, %v} -- {WrongL:%v, Err:%v, Me:%v}\n",
 	//	args.Op, args.Key, args.Value, reply.WrongLeader, reply.Err, reply.Me)
 	if ok && reply.Err == OK {
-		DPrintf("Client PUT OP{%v, %v, %v} success\n", op, key, value)
+		//DPrintf("Client PUT OP{%v, %v, %v} success\n", op, key, value)
 		ck.committed = done
 		return
 	}
 
-	DPrintf("Client REPUTAPPEND\n")
 	if !ok || reply.Index != -1 {
+		//DPrintf("...Client Not sure the entry is committed {%v}\n", args)
 		if ck.isCommitted(ck.latestNum, rand.Uint32(), key) {
+			//DPrintf("...Enryt {%v} committed \n", args)
 			ck.committed = done
 			return
 		} else {
+			//DPrintf("...Entry {%v} not committed \n", args)
 			goto RePutAppend
 		}
 	}
 
 	if reply.Index == -1 {
+		//DPrintf("...Client get wrong leader \n")
 		ck.TheOne()
 		goto RePutAppend
 	}
