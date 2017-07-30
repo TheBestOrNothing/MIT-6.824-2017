@@ -15,27 +15,41 @@ type PutAppendArgs struct {
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	Client uint32
+	SeqNum uint32
 }
 
 type PutAppendReply struct {
 	WrongLeader bool
 	Err         Err
 	Me          int
+	Index       int
+	// You'll have to add definitions here.
+	// Field names must start with capital letters,
+	// otherwise RPC will break.
+	Client    uint32
+	Committed uint32
+	CheckCode uint32
 }
 
 type GetArgs struct {
 	Key string
 	// You'll have to add definitions here.
+	Client    uint32
+	Committed uint32
 }
 
 type GetReply struct {
 	WrongLeader bool
 	Err         Err
 	Value       string
+	Committed   uint32
+	CheckCode   uint32
 }
 
 type GetLeaderArgs struct {
-	Me int
+	Me     int
+	Client uint32
 }
 
 type GetLeaderReply struct {
@@ -43,4 +57,12 @@ type GetLeaderReply struct {
 	Err         Err
 	Me          int
 	Term        int
+	Committed   uint32
+	CheckCode   uint32
 }
+
+type U64Array []uint64
+
+func (a U64Array) Len() int           { return len(a) }
+func (a U64Array) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a U64Array) Less(i, j int) bool { return a[i] < a[j] }

@@ -23,14 +23,19 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	Op    string //the operation
-	Key   string
-	Value string
+	Op     string //the operation
+	Key    string
+	Value  string
+	Client uint32
+	SeqNum uint32
 }
 
 type Entry struct {
-	Op    string
-	Value string
+	Op     string
+	Value  string
+	Index  int
+	Client uint32
+	SeqNum uint32
 }
 
 type RaftKV struct {
@@ -42,7 +47,9 @@ type RaftKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	data map[string]map[int]Entry
+	data      map[string]map[uint64]Entry
+	committed map[uint32]uint32
+	checkCode map[uint32]uint32
 }
 
 func (kv *RaftKV) CheckLeader(args *GetLeaderArgs, reply *GetLeaderReply) {
@@ -50,42 +57,54 @@ func (kv *RaftKV) CheckLeader(args *GetLeaderArgs, reply *GetLeaderReply) {
 	reply.WrongLeader = !isLeader
 	reply.Term = term
 	reply.Me = kv.me
+
+	//reply.Committed = kv.committed[args.Client]
+	//reply.CheckCode = kv.checkCode[args.Client]
 }
 
 func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
-	reply.Value = ""
-
-	putArgs := &PutAppendArgs{
-		Op:    "Get",
-		Key:   args.Key,
-		Value: "",
-	}
-	putReply := &PutAppendReply{}
-	kv.PutAppend(putArgs, putReply)
 	//fmt.Printf("Get :%d - WrongLeader:%v,Err:%v  \n",
 	//	kv.me, putReply.WrongLeader, putReply.Err)
-	reply.WrongLeader = putReply.WrongLeader
-	reply.Err = putReply.Err
-	if reply.Err != OK {
-		return
-	}
+	defer func() {
+		reply.Committed = kv.committed[args.Client]
+		reply.CheckCode = kv.checkCode[args.Client]
+	}()
+
+	reply.WrongLeader = false
+	reply.Err = ErrNoKey
+	reply.Value = ""
 
 	kv.RLock()
 	values := ""
-	entry, _ := kv.data[args.Key]
-	var keys []int
-	for key := range entry {
+	//To Check entry with SeqNum is applied
+	value, ok1 := kv.data[args.Key]
+	if !ok1 {
+		kv.RUnlock()
+		return
+	}
+
+	//CliCmt := uint64(args.Client)<<32 + uint64(args.Committed)
+	//fmt.Printf("CliCmt in Get: CliCmt:%v, Client:%v, Committed:%v\n", CliCmt, args.Client, args.Committed)
+	//_, ok2 := value[CliCmt]
+	//if !ok2 {
+	//	kv.RUnlock()
+	//	return
+	//}
+
+	var keys U64Array
+	for key := range value {
 		keys = append(keys, key)
 	}
-	sort.Ints(keys)
+	sort.Sort(keys)
 	for _, k := range keys {
-		if entry[k].Op == "Get" {
+		if value[k].Op == "Get" {
 			continue
 		}
-		values += entry[k].Value
+		values += value[k].Value
 	}
 	kv.RUnlock()
+	reply.Err = OK
 	reply.Value = values
 	//fmt.Printf("Get From leader:%d - Op{Key:%v, Value:%v} \n",
 	//	kv.me, args.Key, values)
@@ -94,31 +113,49 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 }
 
 func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
+	defer func() {
+		reply.Committed = kv.committed[args.Client]
+		reply.CheckCode = kv.checkCode[args.Client]
+	}()
 
-	cmd := Op{Op: args.Op, Key: args.Key, Value: args.Value}
+	cmd := Op{
+		Op:     args.Op,
+		Key:    args.Key,
+		Value:  args.Value,
+		Client: args.Client,
+		SeqNum: args.SeqNum}
+
 	index, _, isLeader := kv.rf.Start(cmd)
 
 	reply.WrongLeader = !isLeader
 	reply.Err = ErrNoKey
 	reply.Me = kv.me
+	reply.Index = index
 
-	if !isLeader {
+	if index == -1 {
 		return
 	}
-
 	//fmt.Printf("Server:%d Put Start: - Op{Op:%v, Key:%v, Value:%v} index:%d Err:%v\n",
 	//	kv.me, cmd.Op, cmd.Key, cmd.Value, index, reply.Err)
-
 	t0 := time.Now()
-	for time.Since(t0).Seconds() < 5 {
+	for time.Since(t0).Seconds() < 10 {
 		time.Sleep(10 * time.Millisecond)
+		_, isLeader = kv.rf.GetState()
+		if !isLeader {
+			reply.WrongLeader = !isLeader
+			return
+		}
+
 		kv.RLock()
 		entry, ok1 := kv.data[cmd.Key]
 		if !ok1 {
 			kv.RUnlock()
 			continue
 		}
-		v, ok2 := entry[index]
+
+		CliSeq := uint64(args.Client)<<32 + uint64(args.SeqNum)
+		//fmt.Printf("CliSeq in PutAppend: CliSeq:%v, Client:%v, SeqNum:%v\n", CliSeq, args.Client, args.SeqNum)
+		v, ok2 := entry[CliSeq]
 		if !ok2 {
 			kv.RUnlock()
 			continue
@@ -135,6 +172,7 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		}
 		return
 	}
+	fmt.Printf("Warning: Server take more than 10 Sec to PutApp\n")
 }
 
 //
@@ -171,12 +209,13 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.maxraftstate = maxraftstate
 
 	// You may need initialization code here.
-
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
-	kv.data = make(map[string]map[int]Entry)
+	kv.data = make(map[string]map[uint64]Entry)
+	kv.committed = make(map[uint32]uint32)
+	kv.checkCode = make(map[uint32]uint32)
 
 	go func() {
 		for msg := range kv.applyCh {
@@ -185,25 +224,52 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 				//kv.log[msg.Index] = cmd
 				//fmt.Printf("KVRaft:%d - Op{Op:%v, Key:%v, Value:%v} index:%d\n",
 				//	kv.me, cmd.Op, cmd.Key, cmd.Value, msg.Index)
+				//CliSeq := uint64(cmd.Client<<32 + cmd.SeqNum)
+				CliSeq := uint64(cmd.Client)<<32 + uint64(cmd.SeqNum)
+				//fmt.Printf("CliSeq in Apply: CliSeq:%v, Client:%v, SeqNum:%v\n", CliSeq, cmd.Client, cmd.SeqNum)
 				switch cmd.Op {
 				case "Put":
 					delete(kv.data, cmd.Key)
-					entry := make(map[int]Entry)
-					entry[msg.Index] = Entry{Value: cmd.Value, Op: cmd.Op}
+					entry := make(map[uint64]Entry)
+					entry[CliSeq] = Entry{
+						Value:  cmd.Value,
+						Op:     cmd.Op,
+						Client: cmd.Client,
+						Index:  msg.Index,
+						SeqNum: cmd.SeqNum}
+
 					kv.data[cmd.Key] = entry
-				default:
-					//case "Append": case "Get":
+					kv.committed[cmd.Client] = cmd.SeqNum
+				case "Append":
 					entry, ok := kv.data[cmd.Key]
 					if !ok {
-						entry = make(map[int]Entry)
+						entry = make(map[uint64]Entry)
 					}
-					entry[msg.Index] = Entry{Value: cmd.Value, Op: cmd.Op}
+					entry[CliSeq] = Entry{
+						Value:  cmd.Value,
+						Op:     cmd.Op,
+						Client: cmd.Client,
+						Index:  msg.Index,
+						SeqNum: cmd.SeqNum}
+					kv.committed[cmd.Client] = cmd.SeqNum
+				case "Get":
+					entry, ok := kv.data[cmd.Key]
+					if !ok {
+						entry = make(map[uint64]Entry)
+					}
+					entry[CliSeq] = Entry{
+						Value:  cmd.Value,
+						Op:     cmd.Op,
+						Client: cmd.Client,
+						Index:  msg.Index,
+						SeqNum: cmd.SeqNum}
+					kv.checkCode[cmd.Client] = cmd.SeqNum
 				}
 			} else {
 				fmt.Printf("The OP can not dry from msg\n")
 			}
 			kv.Unlock()
-			kv.printData(kv.me)
+			//kv.printData(kv.me)
 		}
 	}()
 
@@ -216,18 +282,24 @@ func (kv *RaftKV) printData(me int) {
 	}
 	fmt.Printf("%d Printing data ...\n", me)
 	kv.RLock()
-	for key, entry := range kv.data {
+	for key, values := range kv.data {
 		fmt.Printf("Key:%v \n", key)
 
-		var keys []int
-		for key := range entry {
+		var keys U64Array
+		for key := range values {
 			keys = append(keys, key)
 		}
-		sort.Ints(keys)
+		sort.Sort(keys)
 		for _, k := range keys {
-			fmt.Printf("{%v - %v, %v} ", k, entry[k].Op, entry[k].Value)
+			//fmt.Printf("{%v - %v, %v, %v, %v} ",
+			//	k, entry[k].Op, entry[k].Value, entry[k].Index, entry[k].Client)
+			//fmt.Printf("{%v - %v, %v, %v} ",
+			//	k, values[k].Op, values[k].Value, values[k].Index)
+			fmt.Printf("{%v, %v, %v} ",
+				values[k].Op, values[k].Value, values[k].Index)
 		}
 		fmt.Printf("\n")
 	}
 	kv.RUnlock()
+	fmt.Printf("printData RUnlock()\n")
 }
