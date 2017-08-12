@@ -1,6 +1,7 @@
 package raftkv
 
 import (
+	"bytes"
 	"encoding/gob"
 	"fmt"
 	"labrpc"
@@ -48,6 +49,7 @@ type RaftKV struct {
 
 	// Your definitions here.
 	data      map[string]map[uint64]Entry
+	zipData   map[string]string
 	committed map[uint32]uint32
 	checkCode map[uint32]uint32
 }
@@ -84,9 +86,6 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 		DPrintf("Server GET No Key:%v exist\n", args.Key)
 		return
 	}
-
-	//CliCmt := uint64(args.Client)<<32 + uint64(args.Committed)
-	//fmt.Printf("CliCmt in Get: CliCmt:%v, Client:%v, Committed:%v\n", CliCmt, args.Client, args.Committed)
 
 	var keys U64Array
 	for key := range value {
@@ -213,14 +212,45 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	// You may need initialization code here.
 	kv.data = make(map[string]map[uint64]Entry)
+	kv.zipData = make(map[string]string)
 	kv.committed = make(map[uint32]uint32)
 	kv.checkCode = make(map[uint32]uint32)
 
 	go func() {
 		for msg := range kv.applyCh {
 			kv.Lock()
+
+			if msg.UseSnapshot {
+				if msg.Snapshot == nil || len(msg.Snapshot) < 1 {
+					kv.Unlock()
+					continue
+				}
+				clt := uint32(0)
+				seq := uint32(0)
+				r := bytes.NewBuffer(msg.Snapshot)
+				d := gob.NewDecoder(r)
+				d.Decode(&kv.zipData)
+				d.Decode(&clt)
+				d.Decode(&seq)
+
+				for key := range kv.data {
+					delete(kv.data, key)
+					entry := make(map[uint64]Entry)
+					CltSeq := uint64(clt)<<32 + uint64(seq)
+					entry[CltSeq] = Entry{
+						Value:  kv.zipData[key],
+						Op:     "Put",
+						Client: clt,
+						Index:  msg.Index,
+						SeqNum: seq}
+					kv.data[key] = entry
+				}
+				kv.committed[clt] = seq
+				kv.Unlock()
+				continue
+			}
+
 			if cmd, ok := (msg.Command).(Op); ok {
-				//kv.log[msg.Index] = cmd
 				//fmt.Printf("KVRaft:%d - Op{Op:%v, Key:%v, Value:%v} index:%d\n",
 				//	kv.me, cmd.Op, cmd.Key, cmd.Value, msg.Index)
 				//CliSeq := uint64(cmd.Client<<32 + cmd.SeqNum)
@@ -264,12 +294,26 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 						SeqNum: cmd.SeqNum}
 					kv.checkCode[cmd.Client] = cmd.SeqNum
 				}
+
+				if maxraftstate != -1 && persister.RaftStateSize() > maxraftstate {
+					//zip kv.data and make a snapshort of data
+					fmt.Printf("Start SnapShot %d\n", kv.me)
+					kv.zip(msg.Index, cmd.Client, cmd.SeqNum)
+					w := new(bytes.Buffer)
+					e := gob.NewEncoder(w)
+					e.Encode(kv.zipData)
+					e.Encode(cmd.Client)
+					e.Encode(cmd.SeqNum)
+					data := w.Bytes()
+					kv.rf.MakeSnapShot(msg.Index, data)
+				}
 			} else {
 				fmt.Printf("The OP can not dry from msg\n")
 			}
-			kv.Unlock()
 			//kv.printData(kv.me)
-		}
+
+			kv.Unlock()
+		} //end for
 	}()
 
 	return kv
@@ -279,7 +323,7 @@ func (kv *RaftKV) printData(me int) {
 	//if _, leader := kv.rf.GetState(); !leader {
 	//	return
 	//}
-	fmt.Printf("%d Printing data ...\n", me)
+	DPrintf("%d Printing data ...\n", me)
 	kv.RLock()
 	for key, values := range kv.data {
 		fmt.Printf("Key:%v \n", key)
@@ -300,5 +344,38 @@ func (kv *RaftKV) printData(me int) {
 		fmt.Printf("\n")
 	}
 	kv.RUnlock()
-	fmt.Printf("printData RUnlock()\n")
+}
+
+func (kv *RaftKV) zip(idx int, clt uint32, seq uint32) {
+
+	for key := range kv.data {
+		//Step 1 : Get all the key and values from kv.data
+		values := ""
+		value, _ := kv.data[key]
+
+		var CltSeqs U64Array
+		for seq := range value {
+			CltSeqs = append(CltSeqs, seq)
+		}
+		sort.Sort(CltSeqs)
+		for _, s := range CltSeqs {
+			if value[s].Op == "Get" {
+				continue
+			}
+			values += value[s].Value
+		}
+		kv.zipData[key] = values
+
+		//step 2 : zip the kv.data and delete frage data in kv.data
+		delete(kv.data, key)
+		entry := make(map[uint64]Entry)
+		CltSeq := uint64(clt)<<32 + uint64(seq)
+		entry[CltSeq] = Entry{
+			Value:  values,
+			Op:     "Put",
+			Client: clt,
+			Index:  idx,
+			SeqNum: seq}
+		kv.data[key] = entry
+	}
 }
