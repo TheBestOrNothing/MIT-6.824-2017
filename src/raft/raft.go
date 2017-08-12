@@ -160,7 +160,6 @@ type RequestAppendArgs struct {
 	LeaderID int     //leader's id,so follower can redirect clients
 	Entries  []Entry //log entries to store(empty for heartbeat)
 	//LAB 2B
-	//LAB 2B
 	PrevLogIndex int
 	PrevLogTerm  int
 	LeaderCommit int
@@ -176,6 +175,7 @@ type RequestAppendReply struct {
 	Success bool
 	//true if follower contained entry matching
 	//prevLogIndex and prevLogTerm
+	PrevIndex int
 }
 
 //
@@ -240,11 +240,6 @@ func (rf *Raft) RequestVote(candidate *RequestVoteArgs, reply *RequestVoteReply)
 	}
 
 	//LAB 2A
-	//If votedFor is null or candidateId, and candidate’s log is at
-	//least as up-to-date as receiver’s log, grant vote
-	//Follower    votedFor == -1    && candidate.Term >= rf.currentTerm
-	//Follower    votedFor != -1    && candidate.Term > rf.currentTerm
-	//Candidate   votedFor == rf.me
 	if (rf.votedFor == -1 ||
 		rf.votedFor == candidate.CandidateID) &&
 		up2date(rf, candidate) {
@@ -348,12 +343,15 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 	rf.currentTerm = leader.Term
 	reply.Term = term
 	reply.Success = true
+
 	entry, ok := rf.log[leader.PrevLogIndex]
 
 	if !ok {
 		DPrintf("RPC(Append) :%d <- %d -- Raft:%d(T:%2d)(S:%d)<-Raft:%d(T:%2d)(Len:%d) false1\n",
 			rf.me, leader.LeaderID,
 			rf.me, rf.currentTerm, rf.status, leader.LeaderID, leader.Term, len(leader.Entries))
+
+		reply.PrevIndex = rf.commitIndex
 		reply.Success = false
 		return
 	}
@@ -370,6 +368,8 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 		for ; idx < logLen; idx++ {
 			delete(rf.log, idx)
 		}
+
+		reply.PrevIndex = rf.commitIndex
 		reply.Success = false
 		DPrintf("RPC(Append) :%d <- %d -- Raft:%d(T:%2d)(S:%d)<-Raft:%d(T:%2d)(Len:%d) false2\n",
 			rf.me, leader.LeaderID,
@@ -377,9 +377,6 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 		return
 	}
 
-	//for k, v := range leader.Entries {
-	//	fmt.Printf("Raft.RequestAppend: follower:%d appending, %d -> %d\n", rf.me, k, v)
-	//}
 	if reply.Success && len(leader.Entries) > 0 {
 		for idx, e := range leader.Entries {
 			rf.log[leader.PrevLogIndex+idx+1] = e
@@ -520,23 +517,9 @@ func sendEntries(rf *Raft) {
 
 				//Find the first confilict index in that term
 				rf.Lock()
-				confilictIdx := 0
-				for ; confilictIdx < logLen; confilictIdx++ {
-					if rf.log[confilictIdx].Term == prevTerm {
-						break
-					}
-				}
-				DPrintf("sendEntires: Raft:%d ReplyFrom %d not success, nextIndex:%d , confilictIdx:%d\n",
-					rf.me, idx, rf.nextIndex[idx], confilictIdx)
-
-				if confilictIdx < rf.nextIndex[idx] {
-					rf.nextIndex[idx] = confilictIdx
-					rf.Unlock()
-					goto ReSent
-				}
+				rf.nextIndex[idx] = replys[idx].PrevIndex + 1
 				rf.Unlock()
-				return
-
+				goto ReSent
 			}
 
 			if replys[idx].Success {
@@ -581,7 +564,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index = rf.nextIndex[rf.me]
 	term = rf.currentTerm
 	entry := Entry{Term: term, Command: command}
-	//fmt.Printf("Raft.Start: Raft:%d, idx:%d, cmd:%d, term:%d\n", rf.me, index, entry.Command.(int), entry.Term)
 	rf.log[index] = entry
 	rf.matchIndex[rf.me] = index
 	rf.nextIndex[rf.me] = index + 1
@@ -590,10 +572,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	//LAB 2B - 4. When themEntry have been saftly replicated,
 	//			  the leader apply the entry to its state machine
-	//go sendEntries(rf)
 
 	//LAB 2B - 5. Return the results of that exection to the client
-	fmt.Printf("Raft Leader:%d, index:%d, term:%d\n", rf.me, index, term)
+	//fmt.Printf("Raft Leader:%d, index:%d, term:%d\n", rf.me, index, term)
 	return index, term, isLeader
 }
 
@@ -888,22 +869,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	return rf
 }
 
-func (rf *Raft) PrintLogsInt() {
+func (rf *Raft) PrintLogs() {
 	fmt.Printf("PrintLogs: Raft:%d ", rf.me)
 	for idx := 1; idx < len(rf.log); idx++ {
 		cmd := rf.log[idx].Command.(int)
 		term := rf.log[idx].Term
 		fmt.Printf("{%3d,%4d} ", term, cmd%10000)
-	}
-	fmt.Printf("\n")
-}
-
-func (rf *Raft) PrintLogsOp() {
-	fmt.Printf("PrintLogs: Raft:%d ", rf.me)
-	for idx := 1; idx < len(rf.log); idx++ {
-		cmd := rf.log[idx].Command.(int)
-		term := rf.log[idx].Term
-		fmt.Printf("%2d:{%2d,%v} ", idx, term, cmd)
 	}
 	fmt.Printf("\n")
 }
