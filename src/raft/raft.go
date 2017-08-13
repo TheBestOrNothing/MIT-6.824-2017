@@ -325,6 +325,7 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 	DPrintf("RPC(Append) :%d <- %d -- Raft:%d(T:%2d)(S:%d)<-Raft:%d(T:%2d)(Len:%d)\n",
 		rf.me, leader.LeaderID,
 		rf.me, rf.currentTerm, rf.status, leader.LeaderID, leader.Term, len(leader.Entries))
+
 	//LAB 2A
 	//If RPC request or response contains term T > currentTerm:
 	//set currentTerm = T, convert to follower (5.1)
@@ -488,7 +489,9 @@ func sendEntries(rf *Raft) {
 			}
 
 			rf.Lock()
+
 			if rf.lastIncludedIndex >= rf.nextIndex[idx] {
+				//fmt.Printf("SendSnapshot: %d->%d LII:%d,nextIdx:%d\n", rf.me, idx, rf.lastIncludedIndex, rf.nextIndex[idx])
 				rf.sendSnapshot(idx)
 				rf.Unlock()
 				return
@@ -603,7 +606,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	//			  the leader apply the entry to its state machine
 
 	//LAB 2B - 5. Return the results of that exection to the client
-	//fmt.Printf("Raft Leader:%d, index:%d, term:%d\n", rf.me, index, term)
+	//fmt.Printf("Raft Leader:%d, index:%d, term:%d, logLen:%d\n", rf.me, index, term, len(rf.log))
 	return index, term, isLeader
 }
 
@@ -767,7 +770,6 @@ func c2l(rf *Raft) {
 		return
 	}
 	DPrintf("C2L........  %d(T:%2d)(S:%d)\n", rf.me, rf.currentTerm, rf.status)
-	//fmt.Printf("C2L........  %d(T:%2d)(S:%d)\n", rf.me, rf.currentTerm, rf.status)
 	//Stop the timeout timer
 	stopTimer(rf.f2c)
 	//candidate to leader
@@ -981,12 +983,12 @@ func (rf *Raft) InstallSnapshot(leader *SnapshotArgs, reply *SnapshotReply) {
 		Snapshot:    leader.Snapshot,
 	}
 
+	//fmt.Printf("RPC(Insatll): ................\n")
 	rf.lastIncludedIndex = leader.LastIncludedIndex
 	rf.lastIncludedTerm = leader.LastIncludedTerm
 	rf.lastApplied = rf.lastIncludedIndex
 	rf.commitIndex = rf.lastIncludedIndex
 	return
-
 }
 
 func (rf *Raft) sendSnapshot(me int) {
@@ -1021,11 +1023,9 @@ func (rf *Raft) sendSnapshot(me int) {
 		return
 	}
 
-	rf.Lock()
 	rf.matchIndex[me] = rf.lastIncludedIndex
 	rf.nextIndex[me] = rf.matchIndex[me] + 1
 	updateCommitIndex(rf)
-	rf.Unlock()
 	return
 }
 

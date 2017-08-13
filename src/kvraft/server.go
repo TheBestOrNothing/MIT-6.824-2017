@@ -101,8 +101,6 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 	kv.RUnlock()
 	reply.Err = OK
 	reply.Value = values
-	//fmt.Printf("Get From leader:%d - Op{Key:%v, Value:%v} \n",
-	//	kv.me, args.Key, values)
 	DPrintf("Server GET OP{%v, %v, %v} success\n", "Get", args.Key, values)
 
 }
@@ -151,7 +149,8 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		}
 
 		CliSeq := uint64(args.Client)<<32 + uint64(args.SeqNum)
-		//fmt.Printf("CliSeq in PutAppend: CliSeq:%v, Client:%v, SeqNum:%v\n", CliSeq, args.Client, args.SeqNum)
+		//fmt.Printf("CliSeq Server: Client:%v, SeqNum:%v, CltSeq:%v\n",
+		//	args.Client, args.SeqNum, CliSeq)
 		v, ok2 := entry[CliSeq]
 		if !ok2 {
 			kv.RUnlock()
@@ -160,8 +159,6 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		//kv.printData()
 		kv.RUnlock()
 		reply.Err = OK
-		//fmt.Printf("Leader:%d - Op{Op:%v, Key:%v, Value:%v} index:%d Err:%v\n",
-		//	kv.me, cmd.Op, cmd.Key, cmd.Value, index, reply.Err)
 		DPrintf("Server PUT OP{%v, %v, %v} success {WrongL:%v, Err:%v, Me:%v,Index:%v}\n",
 			args.Op, args.Key, args.Value, reply.WrongLeader, reply.Err, reply.Me, index)
 		if v.Value != cmd.Value {
@@ -232,9 +229,13 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 				d.Decode(&kv.zipData)
 				d.Decode(&clt)
 				d.Decode(&seq)
+				//kv.printZipData()
 
 				for key := range kv.data {
 					delete(kv.data, key)
+				}
+
+				for key := range kv.zipData {
 					entry := make(map[uint64]Entry)
 					CltSeq := uint64(clt)<<32 + uint64(seq)
 					entry[CltSeq] = Entry{
@@ -242,10 +243,13 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 						Op:     "Put",
 						Client: clt,
 						Index:  msg.Index,
-						SeqNum: seq}
+						SeqNum: seq,
+					}
 					kv.data[key] = entry
+
 				}
 				kv.committed[clt] = seq
+				//kv.printData1(kv.me)
 				kv.Unlock()
 				continue
 			}
@@ -253,9 +257,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 			if cmd, ok := (msg.Command).(Op); ok {
 				//fmt.Printf("KVRaft:%d - Op{Op:%v, Key:%v, Value:%v} index:%d\n",
 				//	kv.me, cmd.Op, cmd.Key, cmd.Value, msg.Index)
-				//CliSeq := uint64(cmd.Client<<32 + cmd.SeqNum)
 				CliSeq := uint64(cmd.Client)<<32 + uint64(cmd.SeqNum)
-				//fmt.Printf("CliSeq in Apply: CliSeq:%v, Client:%v, SeqNum:%v\n", CliSeq, cmd.Client, cmd.SeqNum)
 				switch cmd.Op {
 				case "Put":
 					delete(kv.data, cmd.Key)
@@ -292,13 +294,14 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 						Client: cmd.Client,
 						Index:  msg.Index,
 						SeqNum: cmd.SeqNum}
+					kv.data[cmd.Key] = entry
 					kv.checkCode[cmd.Client] = cmd.SeqNum
 				}
 
 				if maxraftstate != -1 && persister.RaftStateSize() > maxraftstate {
 					//zip kv.data and make a snapshort of data
-					fmt.Printf("Start SnapShot %d\n", kv.me)
 					kv.zip(msg.Index, cmd.Client, cmd.SeqNum)
+					//kv.printZipData()
 					w := new(bytes.Buffer)
 					e := gob.NewEncoder(w)
 					e.Encode(kv.zipData)
@@ -319,12 +322,26 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	return kv
 }
 
+func (kv *RaftKV) printData1(me int) {
+	DPrintf("%d Printing data ...\n", me)
+	var keys []string
+	for key := range kv.data {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		for _, v := range kv.data[key] {
+			fmt.Printf("{%v, %v}", key, v.Value)
+		}
+	}
+
+	fmt.Printf("\n")
+}
 func (kv *RaftKV) printData(me int) {
 	//if _, leader := kv.rf.GetState(); !leader {
 	//	return
 	//}
 	DPrintf("%d Printing data ...\n", me)
-	kv.RLock()
 	for key, values := range kv.data {
 		fmt.Printf("Key:%v \n", key)
 
@@ -343,7 +360,6 @@ func (kv *RaftKV) printData(me int) {
 		}
 		fmt.Printf("\n")
 	}
-	kv.RUnlock()
 }
 
 func (kv *RaftKV) zip(idx int, clt uint32, seq uint32) {
@@ -365,17 +381,18 @@ func (kv *RaftKV) zip(idx int, clt uint32, seq uint32) {
 			values += value[s].Value
 		}
 		kv.zipData[key] = values
-
-		//step 2 : zip the kv.data and delete frage data in kv.data
-		delete(kv.data, key)
-		entry := make(map[uint64]Entry)
-		CltSeq := uint64(clt)<<32 + uint64(seq)
-		entry[CltSeq] = Entry{
-			Value:  values,
-			Op:     "Put",
-			Client: clt,
-			Index:  idx,
-			SeqNum: seq}
-		kv.data[key] = entry
 	}
+}
+
+func (kv *RaftKV) printZipData() {
+	DPrintf("Printing zipData ...\n")
+	var keys []string
+	for key := range kv.zipData {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Printf("{%v, %v}", k, kv.zipData[k])
+	}
+	fmt.Printf("\n")
 }
