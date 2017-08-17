@@ -83,9 +83,11 @@ func (ck *Clerk) TheOne() {
 //If a client re-sends a request, it re-uses the same sequence number.
 //Your server keeps track of the latest sequence number it has seen for each client,
 //and simply ignores any operation that it has already seen.
-func (ck *Clerk) isCommitted(SeqNum uint32, CheckCode uint32, Key string) bool {
+func (ck *Clerk) isCommitted(SeqNum uint32, Key string) bool {
 	//DPrintf("Are you in  isCommitted\n")
 	ck.TheOne()
+	ck.latestNum++
+	CheckCode := ck.latestNum
 	args := &PutAppendArgs{
 		Key:    Key,
 		Value:  "",
@@ -111,7 +113,7 @@ func (ck *Clerk) isCommitted(SeqNum uint32, CheckCode uint32, Key string) bool {
 		return false
 	}
 
-	return ck.isCommitted(SeqNum, CheckCode, Key)
+	return ck.isCommitted(SeqNum, Key)
 }
 
 //
@@ -129,7 +131,8 @@ func (ck *Clerk) isCommitted(SeqNum uint32, CheckCode uint32, Key string) bool {
 func (ck *Clerk) Get(key string) string {
 	DPrintf("Client Get Startting .. key:%v\n", key)
 
-	ck.isCommitted(rand.Uint32(), rand.Uint32(), key)
+	ck.latestNum++
+	ck.isCommitted(ck.latestNum, key)
 	args := &GetArgs{
 		Key:    key,
 		Client: ck.cltId,
@@ -187,7 +190,7 @@ RePutAppend:
 
 	if !ok || reply.Index != -1 {
 		//DPrintf("...Client Not sure the entry is committed {%v}\n", args)
-		if ck.isCommitted(ck.latestNum, rand.Uint32(), key) {
+		if ck.isCommitted(ck.latestNum, key) {
 			//DPrintf("...Enryt {%v} committed \n", args)
 			ck.committed = done
 			return

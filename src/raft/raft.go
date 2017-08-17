@@ -23,6 +23,7 @@ import (
 	"labrpc"
 	"math"
 	"math/rand"
+	"sort"
 	"sync"
 	"time"
 )
@@ -113,9 +114,6 @@ func (rf *Raft) persist() {
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.votedFor)
 	e.Encode(rf.log)
-	e.Encode(rf.lastIncludedIndex)
-	e.Encode(rf.lastIncludedTerm)
-	e.Encode(rf.snapshot)
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
 }
@@ -128,14 +126,67 @@ func (rf *Raft) readPersist(data []byte) {
 		return
 	}
 
+	for key := range rf.log {
+		delete(rf.log, key)
+	}
+
 	r := bytes.NewBuffer(data)
 	d := gob.NewDecoder(r)
 	d.Decode(&rf.currentTerm)
 	d.Decode(&rf.votedFor)
 	d.Decode(&rf.log)
-	d.Decode(&rf.lastIncludedIndex)
-	d.Decode(&rf.lastIncludedTerm)
-	d.Decode(&rf.snapshot)
+}
+
+func (rf *Raft) persistSnapshot() {
+	w := new(bytes.Buffer)
+	e := gob.NewEncoder(w)
+	if len(rf.snapshot) == 0 {
+		return
+	}
+	e.Encode(rf.lastIncludedIndex)
+	e.Encode(rf.lastIncludedTerm)
+	e.Encode(rf.snapshot)
+	data := w.Bytes()
+	rf.persister.SaveSnapshot(data)
+}
+
+//
+// restore previously persisted state.
+//
+func (rf *Raft) readPersistSnapshot(data []byte) {
+	if data == nil || len(data) < 1 { // bootstrap without any state?
+		return
+	}
+	r := bytes.NewBuffer(data)
+	d := gob.NewDecoder(r)
+	index := int(0)
+	term := int(0)
+	var snapshot []byte
+	d.Decode(&index)
+	d.Decode(&term)
+	d.Decode(&snapshot)
+
+	if len(snapshot) == 0 {
+		return
+	}
+
+	rf.snapshot = snapshot
+	rf.lastIncludedIndex = index
+	rf.lastIncludedTerm = term
+
+	//T, I := rf.getLastTermIndex()
+	//fmt.Printf("Raft:%d, ReadSnapshot - Snapshot(T:%d, I:%d), Last(T:%d, I:%d) (Len:%d)\n",
+	//	rf.me, rf.lastIncludedTerm, rf.lastIncludedIndex, T, I, len(rf.log))
+	//rf.PrintLogs2("ReadSnapshot")
+
+	rf.applyCh <- ApplyMsg{
+		Index:       rf.lastIncludedIndex,
+		Command:     nil,
+		UseSnapshot: true,
+		Snapshot:    rf.snapshot,
+	}
+	rf.lastApplied = rf.lastIncludedIndex
+	rf.commitIndex = rf.lastIncludedIndex
 }
 
 //
@@ -403,7 +454,7 @@ func (rf *Raft) RequestAppend(leader *RequestAppendArgs, reply *RequestAppendRep
 		_, lastIdx := rf.getLastTermIndex()
 		f := math.Min(float64(leader.LeaderCommit), float64(lastIdx))
 		rf.commitIndex = int(f)
-		DPrintf("Raft.RequestAppend:commitIdx of Raft:%d update to %d\n", rf.me, rf.commitIndex)
+		DPrintf("Raft.RequestAppend:commitIdx of Raft:%d update to %d, LeaderCommit:%d,lastIdx:%d\n", rf.me, rf.commitIndex, leader.LeaderCommit, lastIdx)
 	}
 	resetTimer(rf.f2c, timeOut())
 	return
@@ -468,7 +519,6 @@ func sendEntries(rf *Raft) {
 	currentTerm := rf.currentTerm
 	//me := rf.me
 	//logLen := len(rf.log)
-	_, lastIdx := rf.getLastTermIndex()
 	peersLen := len(rf.peers)
 
 	//Prepare for all the replys
@@ -489,7 +539,7 @@ func sendEntries(rf *Raft) {
 			}
 
 			rf.Lock()
-
+			_, lastIdx := rf.getLastTermIndex()
 			if rf.lastIncludedIndex >= rf.nextIndex[idx] {
 				//fmt.Printf("SendSnapshot: %d->%d LII:%d,nextIdx:%d\n", rf.me, idx, rf.lastIncludedIndex, rf.nextIndex[idx])
 				rf.sendSnapshot(idx)
@@ -606,7 +656,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	//			  the leader apply the entry to its state machine
 
 	//LAB 2B - 5. Return the results of that exection to the client
-	//fmt.Printf("Raft Leader:%d, index:%d, term:%d, logLen:%d\n", rf.me, index, term, len(rf.log))
+	//fmt.Printf("Start Leader:%d, index:%d, term:%d, logLen:%d\n", rf.me, index, term, len(rf.log))
 	return index, term, isLeader
 }
 
@@ -870,6 +920,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.matchIndex = make([]int, len(rf.peers))
 	//rf.entriesChan = make(chan ApplyMsg, 100)
 	//Lab 2B init the rf.log[0].Term = 0
+	//fmt.Printf("Raft:%d, Startup after crash.... \n", rf.me)
 	entry := Entry{Term: 0}
 	rf.log[0] = entry
 
@@ -879,6 +930,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.applyCh = applyCh
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+	rf.readPersistSnapshot(persister.ReadSnapshot())
 
 	// Your initialization code here (2A, 2B, 2C).
 	//LAB 2A
@@ -932,7 +984,7 @@ func (rf *Raft) MakeSnapShot(snapshotIdx int, snapshot []byte) {
 	rf.Lock()
 	defer rf.Unlock()
 	defer rf.persist()
-	defer rf.persister.SaveSnapshot(snapshot)
+	defer rf.persistSnapshot()
 
 	rf.snapshot = snapshot
 	rf.lastIncludedIndex = snapshotIdx
@@ -940,12 +992,19 @@ func (rf *Raft) MakeSnapShot(snapshotIdx int, snapshot []byte) {
 	for idx := 0; idx <= snapshotIdx; idx++ {
 		delete(rf.log, idx)
 	}
+
+	//T, I := rf.getLastTermIndex()
+	//fmt.Printf("Raft:%d, MakeSnapshot - Snapshot(T:%d, I:%d), Last(T:%d, I:%d) (Len:%d)\n",
+	//	rf.me, rf.lastIncludedTerm, rf.lastIncludedIndex, T, I, len(rf.log))
+	//rf.PrintLogs2("MakeSnapshot")
+
 }
 
 func (rf *Raft) InstallSnapshot(leader *SnapshotArgs, reply *SnapshotReply) {
 	rf.Lock()
 	defer rf.Unlock()
 	defer rf.persist()
+	defer rf.persistSnapshot()
 	// Your code here (2A, 2B).
 	term := rf.currentTerm
 	reply.Term = term
@@ -953,14 +1012,12 @@ func (rf *Raft) InstallSnapshot(leader *SnapshotArgs, reply *SnapshotReply) {
 		return
 	}
 
-	DPrintf("RPC(Insatll):%d <- %d -- Raft:%d(T:%2d)(S:%d)<-Raft:%d(T:%2d)\n",
+	DPrintf("RPC(Install):%d <- %d -- Raft:%d(T:%2d)(S:%d)<-Raft:%d(T:%2d)(I:%d)\n",
 		rf.me, leader.LeaderID,
-		rf.me, rf.currentTerm, rf.status, leader.LeaderID, leader.Term)
+		rf.me, rf.currentTerm, rf.status,
+		leader.LeaderID, leader.LastIncludedTerm, leader.LastIncludedIndex)
 
-	rf.persister.SaveSnapshot(leader.Snapshot)
 	rf.snapshot = leader.Snapshot
-
-	//rf.lastIncludedIndex >= rf.nextIndex[idx]
 
 	entry, ok := rf.log[leader.LastIncludedIndex]
 	if ok && entry.Term == leader.LastIncludedTerm {
@@ -969,6 +1026,8 @@ func (rf *Raft) InstallSnapshot(leader *SnapshotArgs, reply *SnapshotReply) {
 		}
 		rf.lastIncludedIndex = leader.LastIncludedIndex
 		rf.lastIncludedTerm = leader.LastIncludedTerm
+		rf.lastApplied = rf.lastIncludedIndex
+		rf.commitIndex = rf.lastIncludedIndex
 		return
 	}
 
@@ -1051,6 +1110,27 @@ func (rf *Raft) PrintLogs() {
 		cmd := rf.log[idx].Command.(int)
 		term := rf.log[idx].Term
 		fmt.Printf("{%3d,%4d} ", term, cmd%10000)
+	}
+	fmt.Printf("\n")
+}
+
+func (rf *Raft) PrintLogs1(s string) {
+	fmt.Printf("PrintLogs1: Raft:%d Notice:%v", rf.me, s)
+	var ks []int
+	for k := range rf.log {
+		ks = append(ks, k)
+	}
+	sort.Ints(ks)
+	fmt.Printf("Raft:%d, keys:%v\n", rf.me, ks)
+	for _, key := range ks {
+		fmt.Printf("{%3d,%3d} ", key, rf.log[key].Term)
+	}
+	fmt.Printf("\n")
+}
+func (rf *Raft) PrintLogs2(s string) {
+	fmt.Printf("PrintLogs2: Raft:%d %v", rf.me, s)
+	for k, e := range rf.log {
+		fmt.Printf("{%3d,%3d} ", k, e.Term)
 	}
 	fmt.Printf("\n")
 }

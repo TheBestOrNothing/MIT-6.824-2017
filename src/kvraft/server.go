@@ -5,6 +5,7 @@ import (
 	"encoding/gob"
 	"fmt"
 	"labrpc"
+	"log"
 	"raft"
 	"sort"
 	"sync"
@@ -96,6 +97,7 @@ func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
 		if value[k].Op == "Get" {
 			continue
 		}
+		//fmt.Printf("KVserver:%d, key:%d, value:%v\n", k, value[k].Value)
 		values += value[k].Value
 	}
 	kv.RUnlock()
@@ -166,7 +168,7 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		}
 		return
 	}
-	fmt.Printf("Warning: Server take more than 10 Sec to PutApp\n")
+	log.Printf("Warning: Server take more than 10 Sec to PutApp\n")
 }
 
 //
@@ -204,8 +206,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.maxraftstate = maxraftstate
 
 	// You may need initialization code here.
-	kv.applyCh = make(chan raft.ApplyMsg)
-	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	kv.applyCh = make(chan raft.ApplyMsg, 100)
 
 	// You may need initialization code here.
 	kv.data = make(map[string]map[uint64]Entry)
@@ -216,7 +217,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	go func() {
 		for msg := range kv.applyCh {
 			kv.Lock()
-
+			//fmt.Printf("kvServer: Get apply message . UseSnapshot:%v\n", msg.UseSnapshot)
 			if msg.UseSnapshot {
 				if msg.Snapshot == nil || len(msg.Snapshot) < 1 {
 					kv.Unlock()
@@ -234,7 +235,6 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 				for key := range kv.data {
 					delete(kv.data, key)
 				}
-
 				for key := range kv.zipData {
 					entry := make(map[uint64]Entry)
 					CltSeq := uint64(clt)<<32 + uint64(seq)
@@ -300,6 +300,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 				if maxraftstate != -1 && persister.RaftStateSize() > maxraftstate {
 					//zip kv.data and make a snapshort of data
+					//fmt.Printf("kvServer:%d Start up Snapshot,clt:%d, seq:%d\n", kv.me, cmd.Client, cmd.SeqNum)
 					kv.zip(msg.Index, cmd.Client, cmd.SeqNum)
 					//kv.printZipData()
 					w := new(bytes.Buffer)
@@ -319,6 +320,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 		} //end for
 	}()
 
+	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 	return kv
 }
 
