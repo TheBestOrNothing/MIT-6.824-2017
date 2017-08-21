@@ -8,6 +8,7 @@ import (
 	"log"
 	"raft"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -60,19 +61,9 @@ func (kv *RaftKV) CheckLeader(args *GetLeaderArgs, reply *GetLeaderReply) {
 	reply.WrongLeader = !isLeader
 	reply.Term = term
 	reply.Me = kv.me
-
-	//reply.Committed = kv.committed[args.Client]
-	//reply.CheckCode = kv.checkCode[args.Client]
 }
 
 func (kv *RaftKV) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
-	//fmt.Printf("Get :%d - WrongLeader:%v,Err:%v  \n",
-	//	kv.me, putReply.WrongLeader, putReply.Err)
-	//defer func() {
-	//	reply.Committed = kv.committed[args.Client]
-	//	reply.CheckCode = kv.checkCode[args.Client]
-	//}()
 
 	reply.WrongLeader = false
 	reply.Err = ErrNoKey
@@ -115,6 +106,15 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		kv.RUnlock()
 	}()
 
+	//to detect duplicate client requests,
+	//reject client if duplicate requests
+	if args.Op == "Put" || args.Op == "Append" {
+		if args.SeqNum <= kv.committed[args.Client] {
+			reply.Err = OK
+			return
+		}
+	}
+
 	cmd := Op{
 		Op:     args.Op,
 		Key:    args.Key,
@@ -151,8 +151,8 @@ func (kv *RaftKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		}
 
 		CliSeq := uint64(args.Client)<<32 + uint64(args.SeqNum)
-		//fmt.Printf("CliSeq Server: Client:%v, SeqNum:%v, CltSeq:%v\n",
-		//	args.Client, args.SeqNum, CliSeq)
+		//fmt.Printf("kvServer%d: Client:%v, SeqNum:%v, CltSeq:%v\n",
+		//	kv.me, args.Client, args.SeqNum, CliSeq)
 		v, ok2 := entry[CliSeq]
 		if !ok2 {
 			kv.RUnlock()
@@ -198,7 +198,6 @@ func (kv *RaftKV) Kill() {
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *RaftKV {
 	// call gob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
-	//fmt.Printf("StartKVServer :%d\n", me)
 	gob.Register(Op{})
 
 	kv := new(RaftKV)
@@ -217,7 +216,6 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	go func() {
 		for msg := range kv.applyCh {
 			kv.Lock()
-			//fmt.Printf("kvServer: Get apply message . UseSnapshot:%v\n", msg.UseSnapshot)
 			if msg.UseSnapshot {
 				if msg.Snapshot == nil || len(msg.Snapshot) < 1 {
 					kv.Unlock()
@@ -230,14 +228,15 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 				d.Decode(&kv.zipData)
 				d.Decode(&clt)
 				d.Decode(&seq)
-				//kv.printZipData()
+				d.Decode(&kv.committed)
 
 				for key := range kv.data {
 					delete(kv.data, key)
 				}
 				for key := range kv.zipData {
 					entry := make(map[uint64]Entry)
-					CltSeq := uint64(clt)<<32 + uint64(seq)
+					//CltSeq := uint64(clt)<<32 + uint64(seq)
+					CltSeq := uint64(0)
 					entry[CltSeq] = Entry{
 						Value:  kv.zipData[key],
 						Op:     "Put",
@@ -248,8 +247,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 					kv.data[key] = entry
 
 				}
-				kv.committed[clt] = seq
-				//kv.printData1(kv.me)
+				//kv.committed[clt] = seq
+				//kv.printData1("After Load Snapshot")
 				kv.Unlock()
 				continue
 			}
@@ -258,6 +257,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 				//fmt.Printf("KVRaft:%d - Op{Op:%v, Key:%v, Value:%v} index:%d\n",
 				//	kv.me, cmd.Op, cmd.Key, cmd.Value, msg.Index)
 				CliSeq := uint64(cmd.Client)<<32 + uint64(cmd.SeqNum)
+
 				switch cmd.Op {
 				case "Put":
 					delete(kv.data, cmd.Key)
@@ -300,21 +300,20 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 				if maxraftstate != -1 && persister.RaftStateSize() > maxraftstate {
 					//zip kv.data and make a snapshort of data
-					//fmt.Printf("kvServer:%d Start up Snapshot,clt:%d, seq:%d\n", kv.me, cmd.Client, cmd.SeqNum)
+					//fmt.Printf("kvServer:%d Start up Snapshot,Index:%d\n", kv.me, msg.Index)
 					kv.zip(msg.Index, cmd.Client, cmd.SeqNum)
-					//kv.printZipData()
 					w := new(bytes.Buffer)
 					e := gob.NewEncoder(w)
 					e.Encode(kv.zipData)
 					e.Encode(cmd.Client)
 					e.Encode(cmd.SeqNum)
+					e.Encode(kv.committed)
 					data := w.Bytes()
 					kv.rf.MakeSnapShot(msg.Index, data)
 				}
 			} else {
 				fmt.Printf("The OP can not dry from msg\n")
 			}
-			//kv.printData(kv.me)
 
 			kv.Unlock()
 		} //end for
@@ -324,19 +323,49 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	return kv
 }
 
-func (kv *RaftKV) printData1(me int) {
-	DPrintf("%d Printing data ...\n", me)
+func (kv *RaftKV) printData1(notice string) {
+	//if _, leader := kv.rf.GetState(); !leader {
+	//fmt.Printf("kvServer:%d is leader  ... ... ... ... ... ...\n", kv.me)
+	//fmt.Printf("%d Printing data || %v\n", kv.me, notice)
+	//}
+	fmt.Printf("%d Printing data || %v\n", kv.me, notice)
 	var keys []string
 	for key := range kv.data {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	for _, key := range keys {
-		for _, v := range kv.data[key] {
-			fmt.Printf("{%v, %v}", key, v.Value)
+
+	for _, k := range keys {
+		values := ""
+		entry := kv.data[k]
+		var ks U64Array
+		for k := range entry {
+			ks = append(ks, k)
+		}
+		sort.Sort(ks)
+
+		for _, k1 := range ks {
+			if entry[k1].Op == "Get" {
+				continue
+			}
+			if k1 == 0 {
+				if _, leader := kv.rf.GetState(); !leader {
+					fmt.Printf("kvServer:%d, Snapshot Values:%v\n", kv.me, entry[k1].Value)
+				} else {
+					fmt.Printf("Leader  :%d, Snapshot Values:%v\n", kv.me, entry[k1].Value)
+				}
+			}
+			values += entry[k1].Value + "(" + strconv.Itoa(entry[k1].Index) + ")"
+		}
+		if _, leader := kv.rf.GetState(); !leader {
+			fmt.Printf("kvServer:%d, Key:%v, Values:%v\n", kv.me, k, values)
+		} else {
+			fmt.Printf("Leader  :%d, Key:%v, Values:%v\n", kv.me, k, values)
 		}
 	}
 
+	fmt.Printf("\n")
+	fmt.Printf("\n")
 	fmt.Printf("\n")
 }
 func (kv *RaftKV) printData(me int) {
