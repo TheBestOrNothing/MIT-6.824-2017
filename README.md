@@ -5,11 +5,11 @@ The 6.824 open class is excellent as 6.828. It bring us(outside of MIT) into the
 
 The following things have done:
   
-  LAB1 - Map/Reduce input and output, Single-worker word count, Distributing MapReduce tasks, Handling worker failures, 
+  1. Lab1: Map/Reduce input and output, Single-worker word count, Distributing MapReduce tasks, Handling worker failures, 
          Inverted index generation
-  LAB2 - leader election and heartbeats, Appending log entries, Persist raft states, Figure8.
-  LAB3 - Key/value service(Data Base), KV client, Snapshot log compaction.
-  LAB4 - No implement.
+  2. Lab2: leader election and heartbeats, Appending log entries, Persist raft states, Figure8.
+  3. Lab3: Key/value service(Data Base), KV client, Snapshot log compaction.
+  4. Lab4: no implement.
   
 The following issues still have:
   1. The probability of passing Figure8(unreliable) is lager than 80%, Because of the unreliable network 
@@ -19,7 +19,7 @@ The following issues still have:
      got   : x 0 0 yx 0 1 y
     
 What is my next step?
-  I've warmed up when pass the test lab by lab. Now let us start bitcoin journey. 
+  1. I've warmed up when pass the test lab by lab. Now let us start bitcoin journey. 
 
 How to contact with me?
   gongzhe@live.com
