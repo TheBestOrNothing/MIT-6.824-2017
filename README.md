@@ -20,6 +20,9 @@ The following issues still have:
     
 What is my next step?
   1. I've warmed up when pass the test lab by lab. Now let us start bitcoin journey. 
+  2. Could you please share the docs of all labs in http://bitcoin.stanford.edu/? Thanks.
+  3. If you know excellent open labs for bitcoin, please tell me. Thanks.
 
 How to contact with me?
-  gongzhe@live.com
+  1. Mail: gongzhe@live.com
+  2. Location: BeiJing Haidian District 
