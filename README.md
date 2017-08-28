@@ -2,7 +2,6 @@
 Thanks MIT PDOS group for your giving. The 6.824 open class is excellent as 6.828. It bring us(outside of MIT) into the world of distribute system. Your rasie me up more than I can do...
 ----------------------------------------------------------------------------------------
 The following things have done:
-
   LAB1 - Map/Reduce input and output, Single-worker word count, Distributing MapReduce tasks, Handling worker failures, 
          Inverted index generation
          
