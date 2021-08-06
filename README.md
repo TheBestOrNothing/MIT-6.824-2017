@@ -24,5 +24,5 @@ What is my next step?
   3. If you know excellent open labs for bitcoin, please tell me. Thanks.
 
 How to contact with me?
-  1. Mail: gongzhe@live.com
+  1. Mail: gitcoins@outlook.com
   2. Location: BeiJing Haidian District 
